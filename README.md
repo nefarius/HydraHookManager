@@ -46,6 +46,15 @@ This application bundles [Injector v1.4.0](https://github.com/nefarius/Injector/
 
 > **Caution:** Do not inject into games protected by anti-cheat. DLL injection can result in permanent bans from online services.
 
+## Credits
+
+This project uses the following dependencies:
+
+- **[WPF-UI](https://github.com/lepoco/wpfui)** — Fluent Design UI for WPF by [lepo.co](https://lepo.co/)
+- **[CliWrap](https://github.com/Tyrrrz/CliWrap)** — Fluent CLI process execution by [Tyrrrz](https://github.com/Tyrrrz)
+- **[CsWin32](https://github.com/microsoft/CsWin32)** — Source-generated Win32 bindings by Microsoft
+- **[Injector](https://github.com/nefarius/Injector)** — DLL injection/ejection CLI utility by [Nefarius](https://github.com/nefarius) (bundled)
+
 ## License
 
 MIT
