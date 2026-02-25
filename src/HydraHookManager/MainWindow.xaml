@@ -22,7 +22,7 @@
         </StackPanel>
 
         <!-- Process list: grows/shrinks with window resize, docked top and bottom -->
-        <ui:Card Grid.Row="1" Padding="0" Margin="0,0,0,16" VerticalAlignment="Stretch">
+        <ui:Card Grid.Row="1" Padding="0" Margin="0,0,0,16" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -49,7 +49,8 @@
                           GridLinesVisibility="Horizontal"
                           BorderThickness="0"
                           Margin="12,0,12,12"
-                          VerticalAlignment="Stretch">
+                          VerticalAlignment="Stretch"
+                          VerticalContentAlignment="Top">
                     <DataGrid.Columns>
                         <DataGridTemplateColumn Header="" Width="40">
                             <DataGridTemplateColumn.CellTemplate>
