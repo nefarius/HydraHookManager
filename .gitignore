@@ -1,0 +1,20 @@
+# Build
+bin/
+obj/
+*.user
+*.suo
+*.cache
+
+# IDE
+.vs/
+.idea/
+*.rsuser
+
+# NuGet
+*.nupkg
+packages/
+
+# Misc
+*.log
+Injector.zip
+Injector_extract/
