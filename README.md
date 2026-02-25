@@ -1,5 +1,7 @@
 # HydraHook Manager
 
+[![Build](https://github.com/nefarius/HydraHookManager/actions/workflows/build.yml/badge.svg)](https://github.com/nefarius/HydraHookManager/actions/workflows/build.yml)
+
 A Windows GUI application for injecting HydraHook DLLs (and other compatible DLLs) into running processes. Built with .NET 10 and WPF UI.
 
 ## Features
