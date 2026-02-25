@@ -3,8 +3,10 @@ using System.Windows;
 using HydraHookManager.Models;
 using HydraHookManager.Services;
 using Microsoft.Win32;
+using Wpf.Ui;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
+using Wpf.Ui.Extensions;
 
 namespace HydraHookManager;
 
@@ -12,6 +14,7 @@ public partial class MainWindow : FluentWindow
 {
     private readonly IProcessService _processService;
     private readonly IInjectorService _injectorService;
+    private readonly ISnackbarService _snackbarService;
     private readonly ObservableCollection<ProcessInfo> _processes = [];
     private readonly ObservableCollection<string> _dllPaths = [];
 
@@ -19,9 +22,12 @@ public partial class MainWindow : FluentWindow
     {
         _processService = new ProcessService();
         _injectorService = new InjectorService();
+        _snackbarService = new SnackbarService();
 
         InitializeComponent();
         ApplicationThemeManager.Apply(this);
+
+        Loaded += (_, _) => _snackbarService.SetSnackbarPresenter(SnackbarPresenter);
 
         ProcessGrid.ItemsSource = _processes;
         DllListBox.ItemsSource = _dllPaths;
@@ -82,13 +88,13 @@ public partial class MainWindow : FluentWindow
         var selected = ProcessGrid.SelectedItem as ProcessInfo;
         if (selected == null)
         {
-            System.Windows.MessageBox.Show("Please select a process.", "HydraHook Manager", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            _snackbarService.Show("Select process", "Please select a process from the list.", ControlAppearance.Caution);
             return;
         }
 
         if (_dllPaths.Count == 0)
         {
-            System.Windows.MessageBox.Show("Please add at least one DLL to inject.", "HydraHook Manager", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+            _snackbarService.Show("Add DLLs", "Please add at least one DLL to inject.", ControlAppearance.Caution);
             return;
         }
 
@@ -101,9 +107,9 @@ public partial class MainWindow : FluentWindow
 
             var message = string.IsNullOrEmpty(result.Error) ? result.Output : result.Output + "\n\n" + result.Error;
             if (result.Success)
-                System.Windows.MessageBox.Show(message, "Injection successful", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Information);
+                _snackbarService.Show("Injection successful", message, ControlAppearance.Success, TimeSpan.FromSeconds(4));
             else
-                System.Windows.MessageBox.Show(message, "Injection failed", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+                _snackbarService.Show("Injection failed", message, ControlAppearance.Danger, TimeSpan.FromSeconds(8));
         }
         finally
         {

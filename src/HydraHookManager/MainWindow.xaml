@@ -13,6 +13,7 @@
             <RowDefinition Height="*" />
             <RowDefinition Height="180" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Header -->
@@ -102,5 +103,7 @@
                        Click="InjectButton_Click" />
         </StackPanel>
 
+        <!-- Snackbar for injection feedback -->
+        <ui:SnackbarPresenter x:Name="SnackbarPresenter" Grid.Row="4" />
     </Grid>
 </ui:FluentWindow>
