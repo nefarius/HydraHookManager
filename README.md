@@ -1,4 +1,4 @@
-# HydraHook Manager
+# <img src="assets/HydraHook_128x128.png" align="left" /> HydraHook Manager
 
 [![Build](https://github.com/nefarius/HydraHookManager/actions/workflows/build.yml/badge.svg)](https://github.com/nefarius/HydraHookManager/actions/workflows/build.yml)
 
