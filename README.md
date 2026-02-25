@@ -44,7 +44,8 @@ This application bundles [Injector v1.4.0](https://github.com/nefarius/Injector/
 
 [HydraHook](https://github.com/nefarius/HydraHook) is a DirectX API-hooking framework for rendering overlays in games. Build the HydraHook-ImGui sample (or your own host library) and inject the resulting DLL using this manager.
 
-> **Caution:** Do not inject into games protected by anti-cheat. DLL injection can result in permanent bans from online services.
+> [!CAUTION]
+> Do not inject into games protected by anti-cheat. DLL injection can result in permanent bans from online services.
 
 ## Credits
 
