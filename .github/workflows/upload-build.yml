@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"   # Only run when pushing tags that start with 'v'
 
+permissions:
+  actions: read   # Required to list artifacts via the API
+
 jobs:
   build:
     runs-on: windows-latest
@@ -34,14 +37,26 @@ jobs:
         id: get_artifact
         shell: bash
         run: |
-          # Get artifacts for this run
-          response=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          # Get artifacts for this run (artifacts may take a moment to appear)
+          response=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
             https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts)
+          http_code=$(echo "$response" | tail -n1)
+          response=$(echo "$response" | sed '$d')
 
-          artifact_id=$(echo "$response" | jq -r '.artifacts[0].id')
-          artifact_name=$(echo "$response" | jq -r '.artifacts[0].name')
-          artifact_url=$(echo "$response" | jq -r ".artifacts[] | select(.id==$artifact_id) | .archive_download_url")
-          
+          if [ "$http_code" != "200" ]; then
+            echo "API returned HTTP $http_code: $response"
+            exit 1
+          fi
+
+          # Use // [] to handle null artifacts (e.g. API error response)
+          artifact_name=$(echo "$response" | jq -r '(.artifacts // [])[0].name')
+          artifact_url=$(echo "$response" | jq -r '(.artifacts // [])[0].archive_download_url')
+
+          if [ "$artifact_name" = "null" ] || [ -z "$artifact_url" ] || [ "$artifact_url" = "null" ]; then
+            echo "No artifacts found. Response: $response"
+            exit 1
+          fi
+
           echo "file=$artifact_name.zip" >> $GITHUB_OUTPUT
           echo "url=$artifact_url" >> $GITHUB_OUTPUT
 
