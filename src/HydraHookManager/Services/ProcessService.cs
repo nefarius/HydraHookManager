@@ -32,6 +32,29 @@ public sealed class ProcessService : IProcessService
         return Task.Run(() => PopulateMissingIcons(processes, cancellationToken), cancellationToken);
     }
 
+    public unsafe bool TryGetProcessCreationTime(int processId, out long creationTime)
+    {
+        creationTime = 0;
+        if (processId <= 0)
+            return false;
+
+        var process = PInvoke.OpenProcess(PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION, false, (uint)processId);
+        if (IsInvalid(process))
+            return false;
+
+        try
+        {
+            if (!GetProcessTimes((nint)process.Value, out creationTime, out _, out _, out _) || creationTime == 0)
+                return false;
+
+            return true;
+        }
+        finally
+        {
+            PInvoke.CloseHandle(process);
+        }
+    }
+
     private unsafe IReadOnlyList<ProcessInfo> EnumerateProcesses(CancellationToken cancellationToken)
     {
         var windowTitles = CollectWindowTitles();
@@ -354,6 +377,14 @@ public sealed class ProcessService : IProcessService
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
         public string? szTypeName;
     }
+
+    [DllImport("kernel32.dll", EntryPoint = "GetProcessTimes", SetLastError = true)]
+    private static extern bool GetProcessTimes(
+        nint process,
+        out long creationTime,
+        out long exitTime,
+        out long kernelTime,
+        out long userTime);
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
     private static extern nuint SHGetFileInfoW(

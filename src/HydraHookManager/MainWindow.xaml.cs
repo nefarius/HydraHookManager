@@ -27,6 +27,8 @@ public partial class MainWindow : FluentWindow
     private CancellationTokenSource? _refreshCts;
     private int _refreshVersion;
     private int _filterVersion;
+    private int? _selectedProcessId;
+    private long? _selectedProcessCreationTime;
 
     public MainWindow()
     {
@@ -68,8 +70,7 @@ public partial class MainWindow : FluentWindow
             _processes = processes.ToList();
             _filterVersion++;
             var filtered = FilterProcesses(_processes, _processFilter);
-            var selectedId = (ProcessListView.SelectedItem as ProcessInfo)?.Id;
-            ShowProcesses(filtered, selectedId);
+            ShowProcesses(filtered, sameSnapshot: false);
 
             _ = PopulateIconsAsync(processes, token);
         }
@@ -120,8 +121,10 @@ public partial class MainWindow : FluentWindow
         return filtered;
     }
 
-    private void ShowProcesses(List<ProcessInfo> processes, int? selectedId)
+    private void ShowProcesses(List<ProcessInfo> processes, bool sameSnapshot)
     {
+        var selectedId = _selectedProcessId;
+        var selectedCreationTime = _selectedProcessCreationTime;
         var view = new ListCollectionView(processes)
         {
             CustomSort = new ProcessInfoComparer(_sortKey, _sortDescending)
@@ -130,6 +133,16 @@ public partial class MainWindow : FluentWindow
 
         if (selectedId is not int id)
             return;
+
+        if (!sameSnapshot)
+        {
+            if (selectedCreationTime is not long expectedCreationTime)
+                return;
+
+            if (!_processService.TryGetProcessCreationTime(id, out var currentCreationTime)
+                || currentCreationTime != expectedCreationTime)
+                return;
+        }
 
         foreach (ProcessInfo process in view)
         {
@@ -142,6 +155,21 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    private void ProcessListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ProcessListView.SelectedItem is not ProcessInfo process)
+        {
+            _selectedProcessId = null;
+            _selectedProcessCreationTime = null;
+            return;
+        }
+
+        _selectedProcessId = process.Id;
+        _selectedProcessCreationTime = _processService.TryGetProcessCreationTime(process.Id, out var creationTime)
+            ? creationTime
+            : null;
+    }
+
     private async Task ApplyProcessFilterAsync(IReadOnlyList<ProcessInfo> processes, string filter, int version)
     {
         try
@@ -152,8 +180,7 @@ public partial class MainWindow : FluentWindow
                 if (version != _filterVersion || !ReferenceEquals(processes, _processes))
                     return;
 
-                var selectedId = (ProcessListView.SelectedItem as ProcessInfo)?.Id;
-                ShowProcesses(filtered, selectedId);
+                ShowProcesses(filtered, sameSnapshot: true);
             });
         }
         catch (Exception)
@@ -186,8 +213,7 @@ public partial class MainWindow : FluentWindow
         }
 
         UpdateSortIndicators();
-        var selectedId = (ProcessListView.SelectedItem as ProcessInfo)?.Id;
-        ShowProcesses(FilterProcesses(_processes, _processFilter), selectedId);
+        ShowProcesses(FilterProcesses(_processes, _processFilter), sameSnapshot: true);
     }
 
     private void ProcessListView_SizeChanged(object sender, SizeChangedEventArgs e)

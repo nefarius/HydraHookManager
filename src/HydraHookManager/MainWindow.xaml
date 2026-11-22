@@ -97,6 +97,7 @@
                              Margin="12,0,12,12"
                              BorderThickness="0"
                              SelectionMode="Single"
+                             SelectionChanged="ProcessListView_SelectionChanged"
                              IsTextSearchEnabled="False"
                              ScrollViewer.CanContentScroll="True"
                              ScrollViewer.HorizontalScrollBarVisibility="Auto"
