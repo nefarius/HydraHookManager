@@ -1,5 +1,5 @@
+using System.Collections;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -22,6 +22,8 @@ public partial class MainWindow : FluentWindow
     private readonly ObservableCollection<string> _dllPaths = [];
     private List<ProcessInfo> _processes = [];
     private string _processFilter = "";
+    private string _sortKey = "Name";
+    private bool _sortDescending;
     private CancellationTokenSource? _refreshCts;
     private int _refreshVersion;
     private int _filterVersion;
@@ -40,6 +42,7 @@ public partial class MainWindow : FluentWindow
         PreviewKeyDown += MainWindow_PreviewKeyDown;
 
         DllListBox.ItemsSource = _dllPaths;
+        UpdateSortIndicators();
 
         _ = LoadProcessesAsync();
     }
@@ -65,7 +68,7 @@ public partial class MainWindow : FluentWindow
             _processes = processes.ToList();
             _filterVersion++;
             var filtered = FilterProcesses(_processes, _processFilter);
-            var selectedId = (ProcessGrid.SelectedItem as ProcessInfo)?.Id;
+            var selectedId = (ProcessListView.SelectedItem as ProcessInfo)?.Id;
             ShowProcesses(filtered, selectedId);
 
             _ = PopulateIconsAsync(processes, token);
@@ -119,20 +122,11 @@ public partial class MainWindow : FluentWindow
 
     private void ShowProcesses(List<ProcessInfo> processes, int? selectedId)
     {
-        var previousSort = (ProcessGrid.ItemsSource as ICollectionView)?.SortDescriptions.ToArray();
-        var columnSort = ProcessGrid.Columns.Select(column => column.SortDirection).ToArray();
-
-        var view = new ListCollectionView(processes);
-        if (previousSort is { Length: > 0 })
+        var view = new ListCollectionView(processes)
         {
-            foreach (var description in previousSort)
-                view.SortDescriptions.Add(description);
-        }
-
-        ProcessGrid.ItemsSource = view;
-
-        for (var index = 0; index < columnSort.Length && index < ProcessGrid.Columns.Count; index++)
-            ProcessGrid.Columns[index].SortDirection = columnSort[index];
+            CustomSort = new ProcessInfoComparer(_sortKey, _sortDescending)
+        };
+        ProcessListView.ItemsSource = view;
 
         if (selectedId is not int id)
             return;
@@ -142,7 +136,8 @@ public partial class MainWindow : FluentWindow
             if (process.Id != id)
                 continue;
 
-            ProcessGrid.SelectedItem = process;
+            ProcessListView.SelectedItem = process;
+            ProcessListView.ScrollIntoView(process);
             break;
         }
     }
@@ -157,7 +152,7 @@ public partial class MainWindow : FluentWindow
                 if (version != _filterVersion || !ReferenceEquals(processes, _processes))
                     return;
 
-                var selectedId = (ProcessGrid.SelectedItem as ProcessInfo)?.Id;
+                var selectedId = (ProcessListView.SelectedItem as ProcessInfo)?.Id;
                 ShowProcesses(filtered, selectedId);
             });
         }
@@ -169,6 +164,75 @@ public partial class MainWindow : FluentWindow
     private async void RefreshButton_Click(object sender, RoutedEventArgs e)
     {
         await LoadProcessesAsync();
+    }
+
+    private void ProcessListView_ColumnHeaderClick(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is not GridViewColumnHeader header
+            || header.Role != GridViewColumnHeaderRole.Normal
+            || header.Column is not System.Windows.Controls.GridViewColumn column)
+            return;
+
+        var key = ProcessSort.GetKey(column);
+        if (string.IsNullOrEmpty(key))
+            return;
+
+        if (key == _sortKey)
+            _sortDescending = !_sortDescending;
+        else
+        {
+            _sortKey = key;
+            _sortDescending = false;
+        }
+
+        UpdateSortIndicators();
+        var selectedId = (ProcessListView.SelectedItem as ProcessInfo)?.Id;
+        ShowProcesses(FilterProcesses(_processes, _processFilter), selectedId);
+    }
+
+    private void ProcessListView_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.WidthChanged)
+            UpdateProcessColumnWidths();
+    }
+
+    private void UpdateProcessColumnWidths()
+    {
+        const double fixedWidth = 36 + 68 + 72;
+        const double nameMin = 160;
+        const double windowMin = 180;
+        var available = ProcessListView.ActualWidth - fixedWidth - SystemParameters.VerticalScrollBarWidth - 8;
+        if (available <= 0)
+            return;
+
+        var name = Math.Max(nameMin, available * 0.45);
+        var window = available - name;
+        if (window < windowMin)
+        {
+            window = windowMin;
+            name = Math.Max(nameMin, available - window);
+        }
+
+        NameColumn.Width = name;
+        WindowColumn.Width = window;
+    }
+
+    private void UpdateSortIndicators()
+    {
+        if (ProcessListView.View is not System.Windows.Controls.GridView view)
+            return;
+
+        foreach (var column in view.Columns)
+        {
+            var label = ProcessSort.GetLabel(column);
+            if (string.IsNullOrEmpty(label))
+                continue;
+
+            var key = ProcessSort.GetKey(column);
+            column.Header = key == _sortKey
+                ? label + (_sortDescending ? " \u25BC" : " \u25B2")
+                : label;
+        }
     }
 
     private void ProcessFilterBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -216,7 +280,7 @@ public partial class MainWindow : FluentWindow
 
     private async void InjectButton_Click(object sender, RoutedEventArgs e)
     {
-        var selected = ProcessGrid.SelectedItem as ProcessInfo;
+        var selected = ProcessListView.SelectedItem as ProcessInfo;
         if (selected == null)
         {
             _snackbarService.Show("Select process", "Please select a process from the list.", ControlAppearance.Caution);
@@ -246,5 +310,50 @@ public partial class MainWindow : FluentWindow
         {
             InjectButton.IsEnabled = true;
         }
+    }
+}
+
+public static class ProcessSort
+{
+    public static readonly DependencyProperty KeyProperty =
+        DependencyProperty.RegisterAttached("Key", typeof(string), typeof(ProcessSort));
+
+    public static void SetKey(DependencyObject element, string? value) => element.SetValue(KeyProperty, value);
+
+    public static string? GetKey(DependencyObject element) => (string?)element.GetValue(KeyProperty);
+
+    public static readonly DependencyProperty LabelProperty =
+        DependencyProperty.RegisterAttached("Label", typeof(string), typeof(ProcessSort));
+
+    public static void SetLabel(DependencyObject element, string? value) => element.SetValue(LabelProperty, value);
+
+    public static string? GetLabel(DependencyObject element) => (string?)element.GetValue(LabelProperty);
+}
+
+internal sealed class ProcessInfoComparer(string key, bool descending) : IComparer
+{
+    public int Compare(object? x, object? y)
+    {
+        if (ReferenceEquals(x, y))
+            return 0;
+        if (x is not ProcessInfo left)
+            return -1;
+        if (y is not ProcessInfo right)
+            return 1;
+
+        var result = key switch
+        {
+            "Id" => left.Id.CompareTo(right.Id),
+            "Architecture" => string.Compare(left.Architecture, right.Architecture, StringComparison.OrdinalIgnoreCase),
+            "WindowTitle" => string.Compare(left.WindowTitle, right.WindowTitle, StringComparison.OrdinalIgnoreCase),
+            _ => string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase)
+        };
+
+        if (descending)
+            result = -result;
+        if (result == 0 && key != "Id")
+            result = left.Id.CompareTo(right.Id);
+
+        return result;
     }
 }
