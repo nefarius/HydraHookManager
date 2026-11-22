@@ -198,11 +198,10 @@ public partial class MainWindow : FluentWindow
 
     private void UpdateProcessColumnWidths()
     {
-        const double fixedWidth = 36 + 68 + 72;
         const double nameMin = 160;
         const double windowMin = 180;
-        var available = ProcessListView.ActualWidth - fixedWidth - SystemParameters.VerticalScrollBarWidth - 8;
-        if (available <= 0)
+        var available = ProcessListView.ActualWidth - FixedColumnWidth() - SystemParameters.VerticalScrollBarWidth - 8;
+        if (available <= 0 || double.IsNaN(available))
             return;
 
         var name = Math.Max(nameMin, available * 0.45);
@@ -215,6 +214,28 @@ public partial class MainWindow : FluentWindow
 
         NameColumn.Width = name;
         WindowColumn.Width = window;
+    }
+
+    private double FixedColumnWidth()
+    {
+        if (ProcessListView.View is not System.Windows.Controls.GridView view)
+            return 0;
+
+        double width = 0;
+        foreach (var column in view.Columns)
+        {
+            var key = ProcessSort.GetKey(column);
+            if (key is "Name" or "WindowTitle")
+                continue;
+
+            var columnWidth = column.ActualWidth;
+            if (columnWidth <= 0 || double.IsNaN(columnWidth))
+                columnWidth = column.Width;
+            if (columnWidth > 0 && !double.IsNaN(columnWidth))
+                width += columnWidth;
+        }
+
+        return width;
     }
 
     private void UpdateSortIndicators()
