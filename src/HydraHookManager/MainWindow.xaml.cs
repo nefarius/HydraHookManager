@@ -29,6 +29,7 @@ public partial class MainWindow : FluentWindow
     private int _filterVersion;
     private int? _selectedProcessId;
     private long? _selectedProcessCreationTime;
+    private bool _restoringProcessSelection;
 
     public MainWindow()
     {
@@ -129,34 +130,48 @@ public partial class MainWindow : FluentWindow
         {
             CustomSort = new ProcessInfoComparer(_sortKey, _sortDescending)
         };
-        ProcessListView.ItemsSource = view;
 
-        if (selectedId is not int id)
-            return;
-
-        if (!sameSnapshot)
+        // ItemsSource replacement can select another row before the saved process is restored.
+        _restoringProcessSelection = true;
+        try
         {
-            if (selectedCreationTime is not long expectedCreationTime)
+            ProcessListView.ItemsSource = view;
+            ProcessListView.SelectedItem = null;
+
+            if (selectedId is not int id)
                 return;
 
-            if (!_processService.TryGetProcessCreationTime(id, out var currentCreationTime)
-                || currentCreationTime != expectedCreationTime)
-                return;
+            if (!sameSnapshot)
+            {
+                if (selectedCreationTime is not long expectedCreationTime)
+                    return;
+
+                if (!_processService.TryGetProcessCreationTime(id, out var currentCreationTime)
+                    || currentCreationTime != expectedCreationTime)
+                    return;
+            }
+
+            foreach (ProcessInfo process in view)
+            {
+                if (process.Id != id)
+                    continue;
+
+                ProcessListView.SelectedItem = process;
+                ProcessListView.ScrollIntoView(process);
+                break;
+            }
         }
-
-        foreach (ProcessInfo process in view)
+        finally
         {
-            if (process.Id != id)
-                continue;
-
-            ProcessListView.SelectedItem = process;
-            ProcessListView.ScrollIntoView(process);
-            break;
+            _restoringProcessSelection = false;
         }
     }
 
     private void ProcessListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_restoringProcessSelection)
+            return;
+
         if (ProcessListView.SelectedItem is not ProcessInfo process)
         {
             _selectedProcessId = null;
