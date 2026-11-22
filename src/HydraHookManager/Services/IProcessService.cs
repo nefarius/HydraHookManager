@@ -1,6 +1,10 @@
+using HydraHookManager.Models;
+
 namespace HydraHookManager.Services;
 
 public interface IProcessService
 {
-    IReadOnlyList<Models.ProcessInfo> GetProcesses();
+    Task<IReadOnlyList<ProcessInfo>> GetProcessesAsync(CancellationToken cancellationToken = default);
+
+    Task PopulateMissingIconsAsync(IReadOnlyList<ProcessInfo> processes, CancellationToken cancellationToken = default);
 }

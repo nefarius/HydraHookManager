@@ -22,7 +22,7 @@
         </StackPanel>
 
         <!-- Process list: grows/shrinks with window resize, docked top and bottom -->
-        <ui:Card Grid.Row="1" Padding="0" Margin="0,0,0,16" VerticalAlignment="Stretch" VerticalContentAlignment="Top">
+        <ui:Card Grid.Row="1" Padding="0" Margin="0,0,0,16" VerticalAlignment="Stretch" VerticalContentAlignment="Stretch">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -33,7 +33,7 @@
                                PlaceholderText="Filter by name..."
                                Width="200"
                                Margin="0,0,8,0"
-                               KeyDown="ProcessFilterBox_KeyDown" />
+                               TextChanged="ProcessFilterBox_TextChanged" />
                     <ui:Button x:Name="RefreshButton"
                                Content="Refresh"
                                Icon="{ui:SymbolIcon ArrowSync24}"
@@ -49,6 +49,9 @@
                           GridLinesVisibility="Horizontal"
                           BorderThickness="0"
                           Margin="12,0,12,12"
+                          EnableRowVirtualization="True"
+                          VirtualizingPanel.IsVirtualizing="True"
+                          VirtualizingPanel.VirtualizationMode="Recycling"
                           VerticalAlignment="Stretch"
                           VerticalContentAlignment="Top">
                     <DataGrid.Columns>
