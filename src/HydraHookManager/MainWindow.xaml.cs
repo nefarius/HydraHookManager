@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -19,10 +20,11 @@ public partial class MainWindow : FluentWindow
     private readonly IInjectorService _injectorService;
     private readonly ISnackbarService _snackbarService;
     private readonly ObservableCollection<string> _dllPaths = [];
-    private ListCollectionView? _processView;
+    private List<ProcessInfo> _processes = [];
     private string _processFilter = "";
     private CancellationTokenSource? _refreshCts;
     private int _refreshVersion;
+    private int _filterVersion;
 
     public MainWindow()
     {
@@ -51,7 +53,6 @@ public partial class MainWindow : FluentWindow
 
         var token = refresh.Token;
         var version = ++_refreshVersion;
-        var selectedId = (ProcessGrid.SelectedItem as ProcessInfo)?.Id;
         RefreshButton.IsEnabled = false;
 
         try
@@ -61,22 +62,11 @@ public partial class MainWindow : FluentWindow
             if (version != _refreshVersion)
                 return;
 
-            var view = new ListCollectionView(processes.ToList());
-            view.Filter = FilterProcess;
-            _processView = view;
-            ProcessGrid.ItemsSource = view;
-
-            if (selectedId is int id)
-            {
-                foreach (ProcessInfo process in view)
-                {
-                    if (process.Id != id)
-                        continue;
-
-                    ProcessGrid.SelectedItem = process;
-                    break;
-                }
-            }
+            _processes = processes.ToList();
+            _filterVersion++;
+            var filtered = FilterProcesses(_processes, _processFilter);
+            var selectedId = (ProcessGrid.SelectedItem as ProcessInfo)?.Id;
+            ShowProcesses(filtered, selectedId);
 
             _ = PopulateIconsAsync(processes, token);
         }
@@ -112,13 +102,68 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    private bool FilterProcess(object item)
+    private static List<ProcessInfo> FilterProcesses(IReadOnlyList<ProcessInfo> processes, string filter)
     {
-        if (string.IsNullOrEmpty(_processFilter))
-            return true;
+        if (string.IsNullOrEmpty(filter))
+            return processes.ToList();
 
-        return item is ProcessInfo process
-            && process.Name.Contains(_processFilter, StringComparison.OrdinalIgnoreCase);
+        var filtered = new List<ProcessInfo>(processes.Count);
+        foreach (var process in processes)
+        {
+            if (process.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                filtered.Add(process);
+        }
+
+        return filtered;
+    }
+
+    private void ShowProcesses(List<ProcessInfo> processes, int? selectedId)
+    {
+        var previousSort = (ProcessGrid.ItemsSource as ICollectionView)?.SortDescriptions.ToArray();
+        var columnSort = ProcessGrid.Columns.Select(column => column.SortDirection).ToArray();
+
+        var view = new ListCollectionView(processes);
+        if (previousSort is { Length: > 0 })
+        {
+            foreach (var description in previousSort)
+                view.SortDescriptions.Add(description);
+        }
+
+        ProcessGrid.ItemsSource = view;
+
+        for (var index = 0; index < columnSort.Length && index < ProcessGrid.Columns.Count; index++)
+            ProcessGrid.Columns[index].SortDirection = columnSort[index];
+
+        if (selectedId is not int id)
+            return;
+
+        foreach (ProcessInfo process in view)
+        {
+            if (process.Id != id)
+                continue;
+
+            ProcessGrid.SelectedItem = process;
+            break;
+        }
+    }
+
+    private async Task ApplyProcessFilterAsync(IReadOnlyList<ProcessInfo> processes, string filter, int version)
+    {
+        try
+        {
+            var filtered = await Task.Run(() => FilterProcesses(processes, filter));
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (version != _filterVersion || !ReferenceEquals(processes, _processes))
+                    return;
+
+                var selectedId = (ProcessGrid.SelectedItem as ProcessInfo)?.Id;
+                ShowProcesses(filtered, selectedId);
+            });
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private async void RefreshButton_Click(object sender, RoutedEventArgs e)
@@ -128,8 +173,11 @@ public partial class MainWindow : FluentWindow
 
     private void ProcessFilterBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        _processFilter = ProcessFilterBox.Text?.Trim() ?? "";
-        _processView?.Refresh();
+        var filter = ProcessFilterBox.Text?.Trim() ?? "";
+        _processFilter = filter;
+        var processes = _processes;
+        var version = ++_filterVersion;
+        _ = ApplyProcessFilterAsync(processes, filter, version);
     }
 
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
