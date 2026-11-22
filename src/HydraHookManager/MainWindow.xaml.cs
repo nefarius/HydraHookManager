@@ -145,17 +145,24 @@ public partial class MainWindow : FluentWindow
 
         ProcessGrid.UnselectAll();
 
-        if (selectedId is not int id || selectedCreationTime is not long expectedCreationTime)
+        if (selectedId is not int id)
             return;
 
         foreach (ProcessInfo process in view)
         {
-            if (process.Id != id || process.CreationTime != expectedCreationTime)
+            if (process.Id != id)
                 continue;
 
-            if (!sameSnapshot
-                && (!_processService.TryGetProcessCreationTime(id, out var liveCreationTime)
-                    || liveCreationTime != process.CreationTime))
+            if (sameSnapshot)
+            {
+                ProcessGrid.SelectedItem = process;
+                break;
+            }
+
+            if (selectedCreationTime is not long expectedCreationTime
+                || process.CreationTime != expectedCreationTime
+                || !_processService.TryGetProcessCreationTime(id, out var liveCreationTime)
+                || liveCreationTime != process.CreationTime)
                 return;
 
             ProcessGrid.SelectedItem = process;
