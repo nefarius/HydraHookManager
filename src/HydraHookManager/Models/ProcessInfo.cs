@@ -13,6 +13,7 @@ public sealed class ProcessInfo : INotifyPropertyChanged
     public required string Architecture { get; init; }
     public string? WindowTitle { get; init; }
     public string? ExePath { get; init; }
+    public long? CreationTime { get; init; }
 
     public ImageSource? Icon
     {

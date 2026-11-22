@@ -143,23 +143,20 @@ public partial class MainWindow : FluentWindow
                 column.SortDirection = null;
         }
 
-        if (selectedId is not int id)
+        ProcessGrid.UnselectAll();
+
+        if (selectedId is not int id || selectedCreationTime is not long expectedCreationTime)
             return;
-
-        if (!sameSnapshot)
-        {
-            if (selectedCreationTime is not long expectedCreationTime)
-                return;
-
-            if (!_processService.TryGetProcessCreationTime(id, out var currentCreationTime)
-                || currentCreationTime != expectedCreationTime)
-                return;
-        }
 
         foreach (ProcessInfo process in view)
         {
-            if (process.Id != id)
+            if (process.Id != id || process.CreationTime != expectedCreationTime)
                 continue;
+
+            if (!sameSnapshot
+                && (!_processService.TryGetProcessCreationTime(id, out var liveCreationTime)
+                    || liveCreationTime != process.CreationTime))
+                return;
 
             ProcessGrid.SelectedItem = process;
             break;
@@ -176,9 +173,7 @@ public partial class MainWindow : FluentWindow
         }
 
         _selectedProcessId = process.Id;
-        _selectedProcessCreationTime = _processService.TryGetProcessCreationTime(process.Id, out var creationTime)
-            ? creationTime
-            : null;
+        _selectedProcessCreationTime = process.CreationTime;
     }
 
     private async Task ApplyProcessFilterAsync(IReadOnlyList<ProcessInfo> processes, string filter, int version)

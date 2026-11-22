@@ -53,6 +53,7 @@
                           VirtualizingPanel.IsVirtualizing="True"
                           VirtualizingPanel.VirtualizationMode="Recycling"
                           SelectionChanged="ProcessGrid_SelectionChanged"
+                          IsSynchronizedWithCurrentItem="False"
                           VerticalAlignment="Stretch"
                           VerticalContentAlignment="Top">
                     <DataGrid.Columns>
