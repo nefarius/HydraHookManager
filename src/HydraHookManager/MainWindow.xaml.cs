@@ -25,6 +25,8 @@ public partial class MainWindow : FluentWindow
     private CancellationTokenSource? _refreshCts;
     private int _refreshVersion;
     private int _filterVersion;
+    private int? _selectedProcessId;
+    private long? _selectedProcessCreationTime;
 
     public MainWindow()
     {
@@ -65,8 +67,7 @@ public partial class MainWindow : FluentWindow
             _processes = processes.ToList();
             _filterVersion++;
             var filtered = FilterProcesses(_processes, _processFilter);
-            var selectedId = (ProcessGrid.SelectedItem as ProcessInfo)?.Id;
-            ShowProcesses(filtered, selectedId);
+            ShowProcesses(filtered, sameSnapshot: false);
 
             _ = PopulateIconsAsync(processes, token);
         }
@@ -117,8 +118,10 @@ public partial class MainWindow : FluentWindow
         return filtered;
     }
 
-    private void ShowProcesses(List<ProcessInfo> processes, int? selectedId)
+    private void ShowProcesses(List<ProcessInfo> processes, bool sameSnapshot)
     {
+        var selectedId = _selectedProcessId;
+        var selectedCreationTime = _selectedProcessCreationTime;
         var previousSort = (ProcessGrid.ItemsSource as ICollectionView)?.SortDescriptions.ToArray();
         var columnSort = ProcessGrid.Columns.Select(column => column.SortDirection).ToArray();
 
@@ -143,6 +146,16 @@ public partial class MainWindow : FluentWindow
         if (selectedId is not int id)
             return;
 
+        if (!sameSnapshot)
+        {
+            if (selectedCreationTime is not long expectedCreationTime)
+                return;
+
+            if (!_processService.TryGetProcessCreationTime(id, out var currentCreationTime)
+                || currentCreationTime != expectedCreationTime)
+                return;
+        }
+
         foreach (ProcessInfo process in view)
         {
             if (process.Id != id)
@@ -151,6 +164,21 @@ public partial class MainWindow : FluentWindow
             ProcessGrid.SelectedItem = process;
             break;
         }
+    }
+
+    private void ProcessGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ProcessGrid.SelectedItem is not ProcessInfo process)
+        {
+            _selectedProcessId = null;
+            _selectedProcessCreationTime = null;
+            return;
+        }
+
+        _selectedProcessId = process.Id;
+        _selectedProcessCreationTime = _processService.TryGetProcessCreationTime(process.Id, out var creationTime)
+            ? creationTime
+            : null;
     }
 
     private async Task ApplyProcessFilterAsync(IReadOnlyList<ProcessInfo> processes, string filter, int version)
@@ -163,8 +191,7 @@ public partial class MainWindow : FluentWindow
                 if (version != _filterVersion || !ReferenceEquals(processes, _processes))
                     return;
 
-                var selectedId = (ProcessGrid.SelectedItem as ProcessInfo)?.Id;
-                ShowProcesses(filtered, selectedId);
+                ShowProcesses(filtered, sameSnapshot: true);
             });
         }
         catch (Exception)
