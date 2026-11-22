@@ -141,20 +141,39 @@ public partial class MainWindow : FluentWindow
             if (selectedId is not int id)
                 return;
 
-            if (!sameSnapshot)
-            {
-                if (selectedCreationTime is not long expectedCreationTime)
-                    return;
-
-                if (!_processService.TryGetProcessCreationTime(id, out var currentCreationTime)
-                    || currentCreationTime != expectedCreationTime)
-                    return;
-            }
-
             foreach (ProcessInfo process in view)
             {
                 if (process.Id != id)
                     continue;
+
+                if (sameSnapshot)
+                {
+                    ProcessListView.SelectedItem = process;
+                    ProcessListView.ScrollIntoView(process);
+                    break;
+                }
+
+                if (selectedCreationTime is not long expectedCreationTime
+                    || process.CreationTime != expectedCreationTime)
+                {
+                    if (selectedCreationTime is long && process.CreationTime is long)
+                    {
+                        _selectedProcessId = null;
+                        _selectedProcessCreationTime = null;
+                    }
+
+                    return;
+                }
+
+                if (!_processService.TryGetProcessCreationTime(id, out var liveCreationTime))
+                    return;
+
+                if (liveCreationTime != process.CreationTime)
+                {
+                    _selectedProcessId = null;
+                    _selectedProcessCreationTime = null;
+                    return;
+                }
 
                 ProcessListView.SelectedItem = process;
                 ProcessListView.ScrollIntoView(process);
@@ -180,9 +199,7 @@ public partial class MainWindow : FluentWindow
         }
 
         _selectedProcessId = process.Id;
-        _selectedProcessCreationTime = _processService.TryGetProcessCreationTime(process.Id, out var creationTime)
-            ? creationTime
-            : null;
+        _selectedProcessCreationTime = process.CreationTime;
     }
 
     private async Task ApplyProcessFilterAsync(IReadOnlyList<ProcessInfo> processes, string filter, int version)

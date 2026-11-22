@@ -44,10 +44,7 @@ public sealed class ProcessService : IProcessService
 
         try
         {
-            if (!GetProcessTimes((nint)process.Value, out creationTime, out _, out _, out _) || creationTime == 0)
-                return false;
-
-            return true;
+            return TryReadCreationTime(process, out creationTime);
         }
         finally
         {
@@ -83,6 +80,7 @@ public sealed class ProcessService : IProcessService
 
                 string? exePath = null;
                 var architecture = "Unknown";
+                long? creationTime = null;
                 var processHandle = PInvoke.OpenProcess(PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
                 if (!IsInvalid(processHandle))
                 {
@@ -90,6 +88,8 @@ public sealed class ProcessService : IProcessService
                     {
                         exePath = QueryProcessPath(processHandle);
                         architecture = QueryArchitecture(processHandle);
+                        if (TryReadCreationTime(processHandle, out var created))
+                            creationTime = created;
                     }
                     finally
                     {
@@ -109,7 +109,8 @@ public sealed class ProcessService : IProcessService
                     Architecture = architecture,
                     Icon = icon,
                     WindowTitle = string.IsNullOrWhiteSpace(windowTitle) ? null : windowTitle,
-                    ExePath = exePath
+                    ExePath = exePath,
+                    CreationTime = creationTime
                 });
             }
             while (PInvoke.Process32NextW(snapshot, &entry));
@@ -320,6 +321,17 @@ public sealed class ProcessService : IProcessService
 
         _ = PInvoke.EnumWindows(Callback, default);
         return titles;
+    }
+
+    private static unsafe bool TryReadCreationTime(HANDLE process, out long creationTime)
+    {
+        if (!GetProcessTimes((nint)process.Value, out creationTime, out _, out _, out _) || creationTime == 0)
+        {
+            creationTime = 0;
+            return false;
+        }
+
+        return true;
     }
 
     private static unsafe string? QueryProcessPath(HANDLE process)
