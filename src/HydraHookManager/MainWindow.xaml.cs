@@ -123,16 +123,22 @@ public partial class MainWindow : FluentWindow
         var columnSort = ProcessGrid.Columns.Select(column => column.SortDirection).ToArray();
 
         var view = new ListCollectionView(processes);
+        ProcessGrid.ItemsSource = view;
+
         if (previousSort is { Length: > 0 })
         {
             foreach (var description in previousSort)
                 view.SortDescriptions.Add(description);
+
+            for (var index = 0; index < columnSort.Length && index < ProcessGrid.Columns.Count; index++)
+                ProcessGrid.Columns[index].SortDirection = columnSort[index];
         }
-
-        ProcessGrid.ItemsSource = view;
-
-        for (var index = 0; index < columnSort.Length && index < ProcessGrid.Columns.Count; index++)
-            ProcessGrid.Columns[index].SortDirection = columnSort[index];
+        else
+        {
+            view.SortDescriptions.Clear();
+            foreach (var column in ProcessGrid.Columns)
+                column.SortDirection = null;
+        }
 
         if (selectedId is not int id)
             return;
