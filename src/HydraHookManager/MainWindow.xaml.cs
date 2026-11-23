@@ -1,270 +1,173 @@
-using System.Collections;
-using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Input;
 using HydraHookManager.Models;
 using HydraHookManager.Services;
-using Microsoft.Win32;
+using HydraHookManager.ViewModels;
 using Wpf.Ui;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
 using Wpf.Ui.Extensions;
+using Microsoft.Win32;
+using GridView = System.Windows.Controls.GridView;
+using GridViewColumn = System.Windows.Controls.GridViewColumn;
+using GridViewColumnHeader = System.Windows.Controls.GridViewColumnHeader;
+using GridViewColumnHeaderRole = System.Windows.Controls.GridViewColumnHeaderRole;
+using TextBox = System.Windows.Controls.TextBox;
 
 namespace HydraHookManager;
 
 public partial class MainWindow : FluentWindow
 {
-    private readonly IProcessService _processService;
-    private readonly IInjectorService _injectorService;
-    private readonly ISnackbarService _snackbarService;
-    private readonly ObservableCollection<string> _dllPaths = [];
-    private List<ProcessInfo> _processes = [];
-    private string _processFilter = "";
-    private string _sortKey = "Name";
-    private bool _sortDescending;
-    private CancellationTokenSource? _refreshCts;
-    private int _refreshVersion;
-    private int _filterVersion;
-    private int? _selectedProcessId;
-    private long? _selectedProcessCreationTime;
-    private bool _restoringProcessSelection;
+    private readonly MainWindowViewModel _viewModel;
+    private readonly IContentDialogService _contentDialogService;
 
-    public MainWindow()
+    public MainWindow(
+        MainWindowViewModel viewModel,
+        ISnackbarService snackbarService,
+        IContentDialogService contentDialogService)
     {
-        _processService = new ProcessService();
-        _injectorService = new InjectorService();
-        _snackbarService = new SnackbarService();
+        _viewModel = viewModel;
+        _contentDialogService = contentDialogService;
+        DataContext = viewModel;
 
         InitializeComponent();
         ApplicationThemeManager.Apply(this);
+        ApplySavedPlacement();
 
-        Loaded += (_, _) => _snackbarService.SetSnackbarPresenter(SnackbarPresenter);
-        Closed += (_, _) => _refreshCts?.Cancel();
+        snackbarService.SetSnackbarPresenter(SnackbarPresenter);
+        contentDialogService.SetDialogHost(RootContentDialog);
+
         PreviewKeyDown += MainWindow_PreviewKeyDown;
+        Loaded += MainWindow_Loaded;
+        Closing += MainWindow_Closing;
+        viewModel.PropertyChanged += ViewModel_PropertyChanged;
+        viewModel.ExitRequested += (_, _) => Close();
+        viewModel.UpdateAvailable += ViewModel_UpdateAvailable;
 
-        DllListBox.ItemsSource = _dllPaths;
         UpdateSortIndicators();
-
-        _ = LoadProcessesAsync();
     }
 
-    private async Task LoadProcessesAsync()
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        var previous = _refreshCts;
-        var refresh = new CancellationTokenSource();
-        _refreshCts = refresh;
-        previous?.Cancel();
-
-        var token = refresh.Token;
-        var version = ++_refreshVersion;
-        RefreshButton.IsEnabled = false;
-
-        try
-        {
-            var processes = await _processService.GetProcessesAsync(token);
-            token.ThrowIfCancellationRequested();
-            if (version != _refreshVersion)
-                return;
-
-            _processes = processes.ToList();
-            _filterVersion++;
-            var filtered = FilterProcesses(_processes, _processFilter);
-            ShowProcesses(filtered, sameSnapshot: false);
-
-            _ = PopulateIconsAsync(processes, token);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            if (version == _refreshVersion)
-                _snackbarService.Show("Process list", ex.Message, ControlAppearance.Danger);
-        }
-        finally
-        {
-            if (version == _refreshVersion)
-                RefreshButton.IsEnabled = true;
-        }
+        await _viewModel.RefreshAsync();
+        await _viewModel.CheckForUpdatesAsync(manual: false);
     }
 
-    private async Task PopulateIconsAsync(IReadOnlyList<ProcessInfo> processes, CancellationToken cancellationToken)
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
-        try
-        {
-            await _processService.PopulateMissingIconsAsync(processes, cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (AggregateException ex) when (ex.InnerExceptions.All(inner => inner is OperationCanceledException))
-        {
-        }
-        catch (Exception)
-        {
-        }
+        _viewModel.CancelPendingWork();
+
+        Rect bounds = WindowState == WindowState.Normal
+            ? new Rect(Left, Top, Width, Height)
+            : RestoreBounds;
+        WindowPlacementPolicy.Write(_viewModel.Settings, WindowState, bounds);
+        _viewModel.SaveSettings();
     }
 
-    private static List<ProcessInfo> FilterProcesses(IReadOnlyList<ProcessInfo> processes, string filter)
+    private void ApplySavedPlacement()
     {
-        if (string.IsNullOrEmpty(filter))
-            return processes.ToList();
-
-        var filtered = new List<ProcessInfo>(processes.Count);
-        foreach (var process in processes)
+        if (!WindowPlacementPolicy.TryRead(_viewModel.Settings, out WindowPlacementSnapshot saved))
         {
-            if (process.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
-                filtered.Add(process);
-        }
-
-        return filtered;
-    }
-
-    private void ShowProcesses(List<ProcessInfo> processes, bool sameSnapshot)
-    {
-        var selectedId = _selectedProcessId;
-        var selectedCreationTime = _selectedProcessCreationTime;
-        var view = new ListCollectionView(processes)
-        {
-            CustomSort = new ProcessInfoComparer(_sortKey, _sortDescending)
-        };
-
-        // ItemsSource replacement can select another row before the saved process is restored.
-        _restoringProcessSelection = true;
-        try
-        {
-            ProcessListView.ItemsSource = view;
-            ProcessListView.SelectedItem = null;
-
-            if (selectedId is not int id)
-                return;
-
-            if (!sameSnapshot && !TryValidateRefreshedProcess(id, selectedCreationTime))
-            {
-                _selectedProcessId = null;
-                _selectedProcessCreationTime = null;
-                return;
-            }
-
-            foreach (ProcessInfo process in view)
-            {
-                if (process.Id != id)
-                    continue;
-
-                ProcessListView.SelectedItem = process;
-                ProcessListView.ScrollIntoView(process);
-                break;
-            }
-        }
-        finally
-        {
-            _restoringProcessSelection = false;
-        }
-    }
-
-    private bool TryValidateRefreshedProcess(int processId, long? selectedCreationTime)
-    {
-        ProcessInfo? candidate = null;
-        foreach (var process in _processes)
-        {
-            if (process.Id != processId)
-                continue;
-
-            candidate = process;
-            break;
-        }
-
-        return candidate != null
-            && selectedCreationTime is long expectedCreationTime
-            && candidate.CreationTime == expectedCreationTime
-            && _processService.TryGetProcessCreationTime(processId, out var liveCreationTime)
-            && liveCreationTime == candidate.CreationTime;
-    }
-
-    private void ProcessListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_restoringProcessSelection)
-            return;
-
-        if (ProcessListView.SelectedItem is not ProcessInfo process)
-        {
-            _selectedProcessId = null;
-            _selectedProcessCreationTime = null;
             return;
         }
 
-        _selectedProcessId = process.Id;
-        _selectedProcessCreationTime = process.CreationTime;
+        Rect virtualScreen = new(
+            SystemParameters.VirtualScreenLeft,
+            SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth,
+            SystemParameters.VirtualScreenHeight);
+        WindowPlacementSnapshot placement = WindowPlacementPolicy.Resolve(saved, [virtualScreen], SystemParameters.WorkArea);
+
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = placement.Left;
+        Top = placement.Top;
+        Width = placement.Width;
+        Height = placement.Height;
+        if (placement.State == WindowState.Maximized)
+        {
+            WindowState = WindowState.Maximized;
+        }
     }
 
-    private async Task ApplyProcessFilterAsync(IReadOnlyList<ProcessInfo> processes, string filter, int version)
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        try
+        if (e.PropertyName is nameof(MainWindowViewModel.SortKey) or nameof(MainWindowViewModel.SortDescending))
         {
-            var filtered = await Task.Run(() => FilterProcesses(processes, filter));
-            await Dispatcher.InvokeAsync(() =>
-            {
-                if (version != _filterVersion || !ReferenceEquals(processes, _processes))
-                    return;
+            UpdateSortIndicators();
+        }
+    }
 
-                ShowProcesses(filtered, sameSnapshot: true);
+    private async void ViewModel_UpdateAvailable(object? sender, UpdateCheckResult result)
+    {
+        string remote = result.Remote is null ? "a newer version" : UpdateCheckPolicy.Format(result.Remote);
+        string local = result.Local is null ? "this version" : UpdateCheckPolicy.Format(result.Local);
+
+        ContentDialogResult answer = await _contentDialogService.ShowSimpleDialogAsync(
+            new SimpleContentDialogCreateOptions
+            {
+                Title = "Update available",
+                Content = $"HydraHook Manager {remote} is available. You are running {local}.",
+                PrimaryButtonText = "Open release page",
+                CloseButtonText = "Later"
             });
-        }
-        catch (Exception)
+
+        if (answer == ContentDialogResult.Primary
+            && result.ReleaseUrl is { } url
+            && url.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase))
         {
+            _viewModel.OpenReleasePage(url);
         }
     }
 
-    private async void RefreshButton_Click(object sender, RoutedEventArgs e)
+    private void ProcessFilterBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        await LoadProcessesAsync();
+        _ = _viewModel.SetFilterAsync(((TextBox)sender).Text);
     }
 
     private void ProcessListView_ColumnHeaderClick(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource is not GridViewColumnHeader header
             || header.Role != GridViewColumnHeaderRole.Normal
-            || header.Column is not System.Windows.Controls.GridViewColumn column)
-            return;
-
-        var key = ProcessSort.GetKey(column);
-        if (string.IsNullOrEmpty(key))
-            return;
-
-        if (key == _sortKey)
-            _sortDescending = !_sortDescending;
-        else
+            || header.Column is not { } column)
         {
-            _sortKey = key;
-            _sortDescending = false;
+            return;
         }
 
-        UpdateSortIndicators();
-        ShowProcesses(FilterProcesses(_processes, _processFilter), sameSnapshot: true);
+        string? key = ProcessSort.GetKey(column);
+        if (!string.IsNullOrEmpty(key))
+        {
+            _viewModel.SortBy(key);
+        }
     }
 
     private void ProcessListView_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (e.WidthChanged)
+        {
             UpdateProcessColumnWidths();
+        }
     }
 
     private void UpdateProcessColumnWidths()
     {
-        const double nameMin = 160;
-        const double windowMin = 180;
-        var available = ProcessListView.ActualWidth - FixedColumnWidth() - SystemParameters.VerticalScrollBarWidth - 8;
+        const double NAME_MIN = 160;
+        const double WINDOW_MIN = 180;
+        double available = ProcessListView.ActualWidth - FixedColumnWidth() - SystemParameters.VerticalScrollBarWidth - 8;
         if (available <= 0 || double.IsNaN(available))
-            return;
-
-        var name = Math.Max(nameMin, available * 0.45);
-        var window = available - name;
-        if (window < windowMin)
         {
-            window = windowMin;
-            name = Math.Max(nameMin, available - window);
+            return;
+        }
+
+        double name = Math.Max(NAME_MIN, available * 0.45);
+        double window = available - name;
+        if (window < WINDOW_MIN)
+        {
+            window = WINDOW_MIN;
+            name = Math.Max(NAME_MIN, available - window);
         }
 
         NameColumn.Width = name;
@@ -273,21 +176,30 @@ public partial class MainWindow : FluentWindow
 
     private double FixedColumnWidth()
     {
-        if (ProcessListView.View is not System.Windows.Controls.GridView view)
+        if (ProcessListView.View is not GridView view)
+        {
             return 0;
+        }
 
         double width = 0;
-        foreach (var column in view.Columns)
+        foreach (GridViewColumn column in view.Columns)
         {
-            var key = ProcessSort.GetKey(column);
-            if (key is "Name" or "WindowTitle")
+            string? key = ProcessSort.GetKey(column);
+            if (key is ProcessListPolicy.KeyName or ProcessListPolicy.KeyWindowTitle)
+            {
                 continue;
+            }
 
-            var columnWidth = column.ActualWidth;
+            double columnWidth = column.ActualWidth;
             if (columnWidth <= 0 || double.IsNaN(columnWidth))
+            {
                 columnWidth = column.Width;
+            }
+
             if (columnWidth > 0 && !double.IsNaN(columnWidth))
+            {
                 width += columnWidth;
+            }
         }
 
         return width;
@@ -295,43 +207,43 @@ public partial class MainWindow : FluentWindow
 
     private void UpdateSortIndicators()
     {
-        if (ProcessListView.View is not System.Windows.Controls.GridView view)
-            return;
-
-        foreach (var column in view.Columns)
+        if (ProcessListView.View is not GridView view)
         {
-            var label = ProcessSort.GetLabel(column);
-            if (string.IsNullOrEmpty(label))
-                continue;
+            return;
+        }
 
-            var key = ProcessSort.GetKey(column);
-            column.Header = key == _sortKey
-                ? label + (_sortDescending ? " \u25BC" : " \u25B2")
+        foreach (GridViewColumn column in view.Columns)
+        {
+            string? label = ProcessSort.GetLabel(column);
+            if (string.IsNullOrEmpty(label))
+            {
+                continue;
+            }
+
+            column.Header = ProcessSort.GetKey(column) == _viewModel.SortKey
+                ? label + (_viewModel.SortDescending ? " \u25BC" : " \u25B2")
                 : label;
         }
-    }
-
-    private void ProcessFilterBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        var filter = ProcessFilterBox.Text?.Trim() ?? "";
-        _processFilter = filter;
-        var processes = _processes;
-        var version = ++_filterVersion;
-        _ = ApplyProcessFilterAsync(processes, filter, version);
     }
 
     private void MainWindow_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.F5)
+        {
             return;
+        }
 
-        _ = LoadProcessesAsync();
+        if (_viewModel.RefreshCommand.CanExecute(null))
+        {
+            _viewModel.RefreshCommand.Execute(null);
+        }
+
         e.Handled = true;
     }
 
     private void AddDllButton_Click(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog
+        OpenFileDialog dialog = new()
         {
             Filter = "DLL files (*.dll)|*.dll|All files (*.*)|*.*",
             Multiselect = true
@@ -339,97 +251,29 @@ public partial class MainWindow : FluentWindow
 
         if (dialog.ShowDialog() == true)
         {
-            foreach (var path in dialog.FileNames)
-            {
-                if (!_dllPaths.Contains(path))
-                    _dllPaths.Add(path);
-            }
+            _viewModel.AddDlls(dialog.FileNames);
         }
     }
 
-    private void RemoveDllButton_Click(object sender, RoutedEventArgs e)
+    private void DllListBox_DragOver(object sender, DragEventArgs e)
     {
-        var selected = DllListBox.SelectedItem as string;
-        if (selected != null)
-            _dllPaths.Remove(selected);
+        e.Effects = GetDroppedDlls(e).Any() ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
     }
 
-    private async void InjectButton_Click(object sender, RoutedEventArgs e)
+    private void DllListBox_Drop(object sender, DragEventArgs e)
     {
-        var selected = ProcessListView.SelectedItem as ProcessInfo;
-        if (selected == null)
-        {
-            _snackbarService.Show("Select process", "Please select a process from the list.", ControlAppearance.Caution);
-            return;
-        }
-
-        if (_dllPaths.Count == 0)
-        {
-            _snackbarService.Show("Add DLLs", "Please add at least one DLL to inject.", ControlAppearance.Caution);
-            return;
-        }
-
-        var is64Bit = selected.Architecture.Equals("64-bit", StringComparison.OrdinalIgnoreCase);
-        InjectButton.IsEnabled = false;
-
-        try
-        {
-            var result = await _injectorService.InjectAsync(selected.Id, is64Bit, [.. _dllPaths]);
-
-            var message = string.IsNullOrEmpty(result.Error) ? result.Output : result.Output + "\n\n" + result.Error;
-            if (result.Success)
-                _snackbarService.Show("Injection successful", message, ControlAppearance.Success, TimeSpan.FromSeconds(4));
-            else
-                _snackbarService.Show("Injection failed", message, ControlAppearance.Danger, TimeSpan.FromSeconds(8));
-        }
-        finally
-        {
-            InjectButton.IsEnabled = true;
-        }
+        _viewModel.AddDlls(GetDroppedDlls(e));
+        e.Handled = true;
     }
-}
 
-public static class ProcessSort
-{
-    public static readonly DependencyProperty KeyProperty =
-        DependencyProperty.RegisterAttached("Key", typeof(string), typeof(ProcessSort));
-
-    public static void SetKey(DependencyObject element, string? value) => element.SetValue(KeyProperty, value);
-
-    public static string? GetKey(DependencyObject element) => (string?)element.GetValue(KeyProperty);
-
-    public static readonly DependencyProperty LabelProperty =
-        DependencyProperty.RegisterAttached("Label", typeof(string), typeof(ProcessSort));
-
-    public static void SetLabel(DependencyObject element, string? value) => element.SetValue(LabelProperty, value);
-
-    public static string? GetLabel(DependencyObject element) => (string?)element.GetValue(LabelProperty);
-}
-
-internal sealed class ProcessInfoComparer(string key, bool descending) : IComparer
-{
-    public int Compare(object? x, object? y)
+    private static IEnumerable<string> GetDroppedDlls(DragEventArgs e)
     {
-        if (ReferenceEquals(x, y))
-            return 0;
-        if (x is not ProcessInfo left)
-            return -1;
-        if (y is not ProcessInfo right)
-            return 1;
-
-        var result = key switch
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] files)
         {
-            "Id" => left.Id.CompareTo(right.Id),
-            "Architecture" => string.Compare(left.Architecture, right.Architecture, StringComparison.OrdinalIgnoreCase),
-            "WindowTitle" => string.Compare(left.WindowTitle, right.WindowTitle, StringComparison.OrdinalIgnoreCase),
-            _ => string.Compare(left.Name, right.Name, StringComparison.OrdinalIgnoreCase)
-        };
+            return [];
+        }
 
-        if (descending)
-            result = -result;
-        if (result == 0 && key != "Id")
-            result = left.Id.CompareTo(right.Id);
-
-        return result;
+        return files.Where(file => string.Equals(Path.GetExtension(file), ".dll", StringComparison.OrdinalIgnoreCase));
     }
 }

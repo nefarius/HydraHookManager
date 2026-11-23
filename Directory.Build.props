@@ -1,0 +1,24 @@
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Authors>Nefarius Software Solutions e.U.</Authors>
+    <Company>Nefarius Software Solutions e.U.</Company>
+    <Copyright>Copyright (c) Nefarius Software Solutions e.U.</Copyright>
+    <RepositoryUrl>https://github.com/nefarius/HydraHookManager</RepositoryUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MinVer">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>
