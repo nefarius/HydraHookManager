@@ -8,7 +8,7 @@ A Windows GUI application for injecting DLLs into running processes.
 ## Features
 
 - **Process list** — Browse running processes with executable icons, names, PIDs, architecture (32/64-bit), and window titles
-- **Filter** — Search processes by name (type and press Enter or click Refresh)
+- **Filter** — Search processes by name as you type
 - **DLL injection** — Select one or more DLLs and inject them into a target process using [nefarius/Injector](https://github.com/nefarius/Injector)
 - **Architecture matching** — Automatically uses the correct Injector binary (x86 or x64) based on the target process
 

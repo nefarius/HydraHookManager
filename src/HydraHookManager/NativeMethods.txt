@@ -1,1 +1,15 @@
 IsWow64Process
+CreateToolhelp32Snapshot
+Process32FirstW
+Process32NextW
+OpenProcess
+CloseHandle
+QueryFullProcessImageNameW
+EnumWindows
+IsWindowVisible
+GetWindow
+GetWindowThreadProcessId
+GetWindowTextLengthW
+GetWindowTextW
+ExtractIconExW
+DestroyIcon
