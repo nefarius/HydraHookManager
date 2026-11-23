@@ -343,7 +343,21 @@ public class MainWindowViewModelTests
 
         Assert.Equal([@"C:\x86.dll"], Assert.Single(_injector.Calls).Dlls);
         Assert.True(viewModel.DllItems.All(item => item.IsChecked));
-        Assert.Contains("Skipped 1", _notifications.Messages[0].Message, StringComparison.Ordinal);
+        Assert.Contains("Skipped 1 checked DLL(s) that do not match this process.", _notifications.Messages[0].Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Inject_reports_a_skipped_dll_that_cannot_be_read()
+    {
+        _dlls.Results[@"C:\missing.dll"] = new DllInspectionResult(DllFileStatus.Missing, DllArchitecture.Unknown);
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses[0];
+        viewModel.AddDlls([@"C:\a.dll", @"C:\missing.dll"]);
+
+        await viewModel.InjectAsync();
+
+        Assert.Equal([@"C:\a.dll"], Assert.Single(_injector.Calls).Dlls);
+        Assert.Contains("Skipped 1 checked DLL(s) that are missing or not valid PE files.", _notifications.Messages[0].Message, StringComparison.Ordinal);
     }
 
     [Fact]

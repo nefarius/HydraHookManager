@@ -508,7 +508,7 @@
         </Grid>
 
         <!-- Snackbar for injection feedback -->
-        <ui:SnackbarPresenter x:Name="SnackbarPresenter" Grid.Row="5" />
+        <ui:SnackbarPresenter x:Name="SnackbarPresenter" Grid.Row="5" SizeChanged="SnackbarPresenter_SizeChanged" />
 
         <!-- Host for content dialogs (update prompt) -->
         <ui:ContentDialogHost x:Name="RootContentDialog" Grid.RowSpan="6" />

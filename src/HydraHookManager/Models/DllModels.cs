@@ -32,7 +32,29 @@ public sealed class DllEntrySetting
 /// <summary>
 ///     Paths chosen for one inject or eject, plus why the operation cannot run.
 /// </summary>
-public sealed record DllOperationSelection(IReadOnlyList<string> Paths, int SkippedCount, string? BlockingReason);
+public sealed record DllOperationSelection(
+    IReadOnlyList<string> Paths,
+    int SkippedCount,
+    string? BlockingReason,
+    int SkippedUnreadable = 0,
+    int SkippedIncompatible = 0)
+{
+    public string SkippedNote()
+    {
+        if (SkippedCount == 0)
+        {
+            return "";
+        }
+
+        string why = (SkippedUnreadable > 0, SkippedIncompatible > 0) switch
+        {
+            (true, true) => "are unreadable or do not match this process",
+            (true, false) => "are missing or not valid PE files",
+            _ => "do not match this process"
+        };
+        return $"Skipped {SkippedCount} checked DLL(s) that {why}.";
+    }
+}
 
 /// <summary>
 ///     One row in the DLL list. Inspection fields are filled by the PE inspector and the selected process.

@@ -120,6 +120,14 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    private void SnackbarPresenter_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.HeightChanged)
+        {
+            UpdateDllPaneLimit();
+        }
+    }
+
     private void UpdateDllPaneLimit()
     {
         if (RootLayout.ActualHeight <= 0)

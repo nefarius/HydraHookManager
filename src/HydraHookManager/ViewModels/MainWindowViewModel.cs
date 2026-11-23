@@ -709,7 +709,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             string message = BuildMessage(result);
             if (selection.SkippedCount > 0)
             {
-                message += $"{Environment.NewLine}{Environment.NewLine}Skipped {selection.SkippedCount} checked DLL(s) that do not match this process.";
+                message += Environment.NewLine + Environment.NewLine + selection.SkippedNote();
             }
 
             if (result.Success)

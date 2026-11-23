@@ -55,40 +55,38 @@ public static class DllSelectionPolicy
         }
 
         List<string> paths = [];
-        int skipped = 0;
-        bool skippedFile = false;
-        bool skippedArchitecture = false;
+        int skippedUnreadable = 0;
+        int skippedIncompatible = 0;
         foreach (DllItem item in checkedItems)
         {
             if (!eject && item.FileStatus != DllFileStatus.Ok)
             {
-                skipped++;
-                skippedFile = true;
+                skippedUnreadable++;
                 continue;
             }
 
             if (IsKnownArchitectureMismatch(item, processArchitecture)
                 || (!eject && processArchitecture is not null && item.Architecture == DllArchitecture.Unknown))
             {
-                skipped++;
-                skippedArchitecture = true;
+                skippedIncompatible++;
                 continue;
             }
 
             paths.Add(item.Path);
         }
 
+        int skipped = skippedUnreadable + skippedIncompatible;
         if (paths.Count > 0)
         {
-            return new DllOperationSelection(paths, skipped, null);
+            return new DllOperationSelection(paths, skipped, null, skippedUnreadable, skippedIncompatible);
         }
 
-        string blocking = skippedFile && skippedArchitecture
+        string blocking = skippedUnreadable > 0 && skippedIncompatible > 0
             ? "No checked DLL matches this process and is a readable PE file."
-            : skippedFile
+            : skippedUnreadable > 0
                 ? "The checked DLLs are missing or not valid PE files."
                 : "No checked DLL matches this process architecture.";
-        return new DllOperationSelection([], skipped, blocking);
+        return new DllOperationSelection([], skipped, blocking, skippedUnreadable, skippedIncompatible);
     }
 
     public static void RefreshSelectionState(
