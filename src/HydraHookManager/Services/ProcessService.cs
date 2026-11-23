@@ -17,13 +17,20 @@ namespace HydraHookManager.Services;
 public sealed class ProcessService : IProcessService
 {
     private const int PathBufferChars = 1024;
+    private const int ErrorAccessDenied = 5;
 
+    private readonly IElevationService _elevation;
     private readonly ConcurrentDictionary<string, ImageSource> _iconCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<ProcessInstanceKey, CachedProcessMetadata> _metadataCache = new();
     private readonly object _defaultIconLock = new();
     private ImageSource? _defaultExeIcon;
 
     private readonly record struct CachedProcessMetadata(string? ExePath, string Architecture);
+
+    public ProcessService(IElevationService elevation)
+    {
+        _elevation = elevation;
+    }
 
     public Task<IReadOnlyList<ProcessInfo>> GetProcessesAsync(CancellationToken cancellationToken = default)
     {
@@ -53,6 +60,27 @@ public sealed class ProcessService : IProcessService
         {
             PInvoke.CloseHandle(process);
         }
+    }
+
+    public bool TryBringWindowToFront(int processId)
+    {
+        if (processId <= 0)
+        {
+            return false;
+        }
+
+        HWND window = FindMainWindow((uint)processId);
+        if (window.IsNull)
+        {
+            return false;
+        }
+
+        if (PInvoke.IsIconic(window))
+        {
+            _ = PInvoke.ShowWindow(window, SHOW_WINDOW_CMD.SW_RESTORE);
+        }
+
+        return PInvoke.SetForegroundWindow(window);
     }
 
     private unsafe IReadOnlyList<ProcessInfo> EnumerateProcesses(CancellationToken cancellationToken)
@@ -85,9 +113,18 @@ public sealed class ProcessService : IProcessService
                 string? exePath = null;
                 var architecture = "Unknown";
                 long? creationTime = null;
+                ProcessAccessState access = ProcessAccessState.Unknown;
                 var processHandle = PInvoke.OpenProcess(PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
-                if (!IsInvalid(processHandle))
+                if (IsInvalid(processHandle))
                 {
+                    if (Marshal.GetLastWin32Error() == ErrorAccessDenied)
+                    {
+                        access = _elevation.IsElevated ? ProcessAccessState.Protected : ProcessAccessState.RequiresAdmin;
+                    }
+                }
+                else
+                {
+                    access = ProcessAccessState.Accessible;
                     try
                     {
                         if (TryReadCreationTime(processHandle, out var created))
@@ -135,7 +172,8 @@ public sealed class ProcessService : IProcessService
                     Icon = icon,
                     WindowTitle = string.IsNullOrWhiteSpace(windowTitle) ? null : windowTitle,
                     ExePath = exePath,
-                    CreationTime = creationTime
+                    CreationTime = creationTime,
+                    AccessState = access
                 });
             }
             while (PInvoke.Process32NextW(snapshot, &entry));
@@ -352,6 +390,36 @@ public sealed class ProcessService : IProcessService
 
         _ = PInvoke.EnumWindows(Callback, default);
         return titles;
+    }
+
+    private static unsafe HWND FindMainWindow(uint processId)
+    {
+        HWND found = HWND.Null;
+
+        unsafe BOOL Callback(HWND hwnd, LPARAM lParam)
+        {
+            if (found != HWND.Null || !PInvoke.IsWindowVisible(hwnd))
+            {
+                return true;
+            }
+
+            if (PInvoke.GetWindow(hwnd, GET_WINDOW_CMD.GW_OWNER) != HWND.Null)
+            {
+                return true;
+            }
+
+            _ = PInvoke.GetWindowThreadProcessId(hwnd, out uint ownerId);
+            if (ownerId != processId || PInvoke.GetWindowTextLength(hwnd) <= 0)
+            {
+                return true;
+            }
+
+            found = hwnd;
+            return false;
+        }
+
+        _ = PInvoke.EnumWindows(Callback, default);
+        return found;
     }
 
     private static unsafe bool TryReadCreationTime(HANDLE process, out long creationTime)

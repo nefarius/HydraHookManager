@@ -29,6 +29,8 @@ public sealed class JsonSettingsServiceTests : IDisposable
         Assert.True(service.Current.IsTreeView);
         Assert.True(service.Current.IsAutoRefreshEnabled);
         Assert.False(service.Current.ShowWindowedOnly);
+        Assert.False(service.Current.ShowDirect3DOnly);
+        Assert.False(service.Current.ShowInjectedOnly);
     }
 
     [Fact]
@@ -72,6 +74,8 @@ public sealed class JsonSettingsServiceTests : IDisposable
         writer.Current.IsTreeView = false;
         writer.Current.IsAutoRefreshEnabled = false;
         writer.Current.ShowWindowedOnly = true;
+        writer.Current.ShowDirect3DOnly = true;
+        writer.Current.ShowInjectedOnly = true;
 
         writer.Save();
         AppSettings loaded = new JsonSettingsService(SettingsPath).Current;
@@ -89,6 +93,8 @@ public sealed class JsonSettingsServiceTests : IDisposable
         Assert.False(loaded.IsTreeView);
         Assert.False(loaded.IsAutoRefreshEnabled);
         Assert.True(loaded.ShowWindowedOnly);
+        Assert.True(loaded.ShowDirect3DOnly);
+        Assert.True(loaded.ShowInjectedOnly);
     }
 
     [Fact]

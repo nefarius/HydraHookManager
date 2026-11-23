@@ -51,6 +51,16 @@ internal sealed class FakeProcessService : IProcessService
     {
         return LiveCreationTimes.TryGetValue(processId, out creationTime);
     }
+
+    public List<int> BroughtToFront { get; } = [];
+
+    public bool BringToFrontResult { get; set; } = true;
+
+    public bool TryBringWindowToFront(int processId)
+    {
+        BroughtToFront.Add(processId);
+        return BringToFrontResult;
+    }
 }
 
 internal sealed class FakeInjectorService : IInjectorService
@@ -69,6 +79,38 @@ internal sealed class FakeInjectorService : IInjectorService
     {
         Calls.Add(("eject", processId, is64Bit, [.. dllPaths]));
         return Task.FromResult(Result);
+    }
+}
+
+internal sealed class FakeModuleScanner : IModuleScannerService
+{
+    public List<(int ProcessId, long? CreationTime)> Calls { get; } = [];
+
+    public ModuleScanResult Result { get; set; } = new(ProcessAccessState.Accessible, [], null);
+
+    public Dictionary<int, ModuleScanResult> ResultsByProcess { get; } = [];
+
+    public Task<ModuleScanResult> ScanProcessAsync(int processId, long? expectedCreationTime, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((processId, expectedCreationTime));
+        if (ResultsByProcess.TryGetValue(processId, out ModuleScanResult? result))
+        {
+            return Task.FromResult(result);
+        }
+
+        return Task.FromResult(Result);
+    }
+}
+
+internal sealed class FakeInjectionStateService : IInjectionStateService
+{
+    public InjectionStateData Current { get; } = new();
+
+    public int SaveCount { get; private set; }
+
+    public void Save()
+    {
+        SaveCount++;
     }
 }
 

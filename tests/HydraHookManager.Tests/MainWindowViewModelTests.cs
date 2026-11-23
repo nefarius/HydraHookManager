@@ -12,10 +12,20 @@ public class MainWindowViewModelTests
     private readonly FakeElevationService _elevation = new();
     private readonly FakeUpdateCheckService _updates = new();
     private readonly FakeNotificationService _notifications = new();
+    private readonly FakeModuleScanner _modules = new();
+    private readonly FakeInjectionStateService _ledger = new();
 
     private MainWindowViewModel CreateViewModel()
     {
-        return new MainWindowViewModel(_processes, _injector, _settings, _elevation, _updates, _notifications);
+        return new MainWindowViewModel(
+            _processes,
+            _injector,
+            _settings,
+            _elevation,
+            _updates,
+            _notifications,
+            _modules,
+            _ledger);
     }
 
     private async Task<MainWindowViewModel> CreateLoadedViewModelAsync()
@@ -64,7 +74,7 @@ public class MainWindowViewModelTests
     {
         MainWindowViewModel viewModel = CreateViewModel();
         ThrowingProcessService failing = new();
-        MainWindowViewModel failingViewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications);
+        MainWindowViewModel failingViewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger);
 
         await failingViewModel.RefreshAsync();
 
@@ -440,7 +450,7 @@ public class MainWindowViewModelTests
         TaskCompletionSource<InjectResult> gate = new();
         BlockingInjectorService blocking = new(gate.Task);
         _processes.Processes = [TestData.Process(10, "game")];
-        MainWindowViewModel viewModel = new(_processes, blocking, _settings, _elevation, _updates, _notifications);
+        MainWindowViewModel viewModel = new(_processes, blocking, _settings, _elevation, _updates, _notifications, _modules, _ledger);
         await viewModel.RefreshAsync();
         viewModel.SelectedProcess = viewModel.VisibleProcesses[0];
         viewModel.AddDlls([@"C:\a.dll"]);
@@ -497,7 +507,7 @@ public class MainWindowViewModelTests
     {
         TaskCompletionSource gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         GatedProcessService processes = new(gate.Task);
-        MainWindowViewModel viewModel = new(processes, _injector, _settings, _elevation, _updates, _notifications);
+        MainWindowViewModel viewModel = new(processes, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger);
 
         Task first = viewModel.RefreshIfIdleAsync();
         Task second = viewModel.RefreshIfIdleAsync();
@@ -517,7 +527,7 @@ public class MainWindowViewModelTests
     public async Task Background_refresh_failure_does_not_notify()
     {
         ThrowingProcessService failing = new();
-        MainWindowViewModel viewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications);
+        MainWindowViewModel viewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger);
 
         await viewModel.RefreshIfIdleAsync();
 
@@ -730,6 +740,168 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Refresh_scans_windowed_and_tracked_processes_only()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(1, "game", window: "Play", created: 1),
+            TestData.Process(2, "helper", created: 2),
+            TestData.Process(3, "tracked", created: 3, exePath: @"C:\tracked.exe")
+        ];
+        _ledger.Current.Entries.Add(new InjectionLedgerEntry
+        {
+            ProcessId = 3,
+            CreationTime = 3,
+            ExePath = @"C:\tracked.exe",
+            DllPaths = [@"C:\a.dll"]
+        });
+        _modules.ResultsByProcess[3] = new ModuleScanResult(ProcessAccessState.RequiresAdmin, [], null);
+        MainWindowViewModel viewModel = CreateViewModel();
+
+        await viewModel.RefreshAsync();
+
+        Assert.Equal([1, 3], _modules.Calls.Select(call => call.ProcessId));
+        Assert.Equal(InjectionBadgeState.TrackedUnverified, viewModel.VisibleProcesses.Single(process => process.Id == 3).InjectionState);
+    }
+
+    [Fact]
+    public async Task Selecting_a_process_scans_that_process()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(1, "game", window: "Play", created: 1),
+            TestData.Process(2, "helper", created: 2)
+        ];
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        _modules.Calls.Clear();
+
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 2);
+
+        Assert.Equal([2], _modules.Calls.Select(call => call.ProcessId));
+    }
+
+    [Fact]
+    public async Task Direct3D_filter_scans_processes_without_a_window()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(1, "game", window: "Play", created: 1),
+            TestData.Process(2, "helper", created: 2)
+        ];
+        _modules.Result = new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("d3d11.dll", @"C:\Windows\System32\d3d11.dll", 0, 10)],
+            "D3D11");
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        _modules.Calls.Clear();
+
+        viewModel.ShowDirect3DOnly = true;
+
+        Assert.Equal([1, 2], _modules.Calls.Select(call => call.ProcessId));
+        Assert.Equal([1, 2], viewModel.VisibleProcesses.Select(process => process.Id));
+        Assert.Equal("D3D11", viewModel.VisibleProcesses[0].GraphicsApi);
+        Assert.True(_settings.Current.ShowDirect3DOnly);
+    }
+
+    [Fact]
+    public async Task Successful_inject_is_still_marked_after_a_new_view_model()
+    {
+        _processes.Processes = [TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\game.exe")];
+        _processes.LiveCreationTimes[10] = 1000;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        _modules.ResultsByProcess[10] = new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("a.dll", @"C:\a.dll", 0x1000, 4096)],
+            null);
+
+        await viewModel.InjectAsync();
+
+        Assert.Equal(InjectionBadgeState.Verified, viewModel.SelectedProcess?.InjectionState);
+        Assert.Contains(@"C:\a.dll", _ledger.Current.Entries.Single().DllPaths);
+
+        MainWindowViewModel restarted = CreateViewModel();
+        await restarted.RefreshAsync();
+
+        ProcessInfo game = restarted.VisibleProcesses.Single();
+        Assert.Equal(InjectionBadgeState.Verified, game.InjectionState);
+        Assert.Contains(@"C:\a.dll", game.InjectedDlls);
+    }
+
+    [Fact]
+    public async Task EjectDll_removes_one_loaded_dll_from_the_ledger()
+    {
+        _processes.Processes = [TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\game.exe")];
+        _processes.LiveCreationTimes[10] = 1000;
+        _ledger.Current.Entries.Add(new InjectionLedgerEntry
+        {
+            ProcessId = 10,
+            CreationTime = 1000,
+            ExePath = @"C:\game.exe",
+            DllPaths = [@"C:\a.dll", @"C:\b.dll"]
+        });
+        _modules.ResultsByProcess[10] = new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [
+                new LoadedModuleInfo("a.dll", @"C:\a.dll", 0, 10),
+                new LoadedModuleInfo("b.dll", @"C:\b.dll", 0, 10)
+            ],
+            null);
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single();
+        _modules.Calls.Clear();
+
+        Assert.True(await viewModel.EjectDllAsync(viewModel.SelectedProcess, @"C:\a.dll"));
+
+        Assert.Equal("eject", _injector.Calls.Single().Action);
+        Assert.Equal(10, _injector.Calls.Single().ProcessId);
+        Assert.Equal([@"C:\a.dll"], _injector.Calls.Single().Dlls);
+        Assert.Equal([@"C:\b.dll"], _ledger.Current.Entries.Single().DllPaths);
+        Assert.Equal([@"C:\b.dll"], viewModel.SelectedProcess?.InjectedDlls);
+    }
+
+    [Fact]
+    public async Task Context_commands_use_the_selected_process()
+    {
+        _processes.Processes = [TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\game.exe")];
+        _processes.LiveCreationTimes[10] = 1000;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        ProcessInfo? inspected = null;
+        viewModel.InspectModulesRequested += (_, process) => inspected = process;
+
+        viewModel.BringWindowToFrontCommand.Execute(null);
+        viewModel.CopyPathCommand.Execute(null);
+        viewModel.InspectModulesCommand.Execute(null);
+
+        Assert.Contains(_notifications.Messages, message => message.Title == "Select process");
+        Assert.Null(inspected);
+
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single();
+        viewModel.BringWindowToFrontCommand.Execute(null);
+        viewModel.InspectModulesCommand.Execute(null);
+
+        Assert.Equal([10], _processes.BroughtToFront);
+        Assert.Equal(10, inspected?.Id);
+    }
+
+    [Fact]
+    public void Injected_filter_option_is_persisted()
+    {
+        MainWindowViewModel viewModel = CreateViewModel();
+
+        viewModel.ShowInjectedOnly = true;
+
+        Assert.True(_settings.Current.ShowInjectedOnly);
+        Assert.Equal(1, _settings.SaveCount);
+    }
+
+    [Fact]
     public void SaveSettings_writes_dlls_and_sort_order()
     {
         MainWindowViewModel viewModel = CreateViewModel();
@@ -758,6 +930,11 @@ public class MainWindowViewModelTests
             creationTime = 0;
             return false;
         }
+
+        public bool TryBringWindowToFront(int processId)
+        {
+            return false;
+        }
     }
 
     private sealed class GatedProcessService(Task gate) : IProcessService
@@ -779,6 +956,11 @@ public class MainWindowViewModelTests
         public bool TryGetProcessCreationTime(int processId, out long creationTime)
         {
             creationTime = 0;
+            return false;
+        }
+
+        public bool TryBringWindowToFront(int processId)
+        {
             return false;
         }
     }

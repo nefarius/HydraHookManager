@@ -9,4 +9,6 @@ public interface IProcessService
     Task PopulateMissingIconsAsync(IReadOnlyList<ProcessInfo> processes, CancellationToken cancellationToken = default);
 
     bool TryGetProcessCreationTime(int processId, out long creationTime);
+
+    bool TryBringWindowToFront(int processId);
 }

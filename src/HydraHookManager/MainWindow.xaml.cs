@@ -4,10 +4,12 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using HydraHookManager.Models;
 using HydraHookManager.Services;
 using HydraHookManager.ViewModels;
+using HydraHookManager.Views;
 using Wpf.Ui;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
@@ -24,16 +26,19 @@ namespace HydraHookManager;
 public partial class MainWindow : FluentWindow
 {
     private readonly MainWindowViewModel _viewModel;
+    private readonly IModuleScannerService _moduleScanner;
     private readonly IContentDialogService _contentDialogService;
     private readonly DispatcherTimer _autoRefreshTimer;
     private WindowState _lastWindowState = WindowState.Normal;
 
     public MainWindow(
         MainWindowViewModel viewModel,
+        IModuleScannerService moduleScanner,
         ISnackbarService snackbarService,
         IContentDialogService contentDialogService)
     {
         _viewModel = viewModel;
+        _moduleScanner = moduleScanner;
         _contentDialogService = contentDialogService;
         DataContext = viewModel;
 
@@ -55,6 +60,7 @@ public partial class MainWindow : FluentWindow
         viewModel.PropertyChanged += ViewModel_PropertyChanged;
         viewModel.ExitRequested += (_, _) => Close();
         viewModel.UpdateAvailable += ViewModel_UpdateAvailable;
+        viewModel.InspectModulesRequested += ViewModel_InspectModulesRequested;
 
         UpdateSortIndicators();
     }
@@ -190,6 +196,46 @@ public partial class MainWindow : FluentWindow
     private void ProcessFilterBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         _ = _viewModel.SetFilterAsync(((TextBox)sender).Text);
+    }
+
+    private void ProcessListView_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source)
+        {
+            return;
+        }
+
+        ProcessInfo? process = FindProcess(source);
+        if (process is not null)
+        {
+            ProcessListView.SelectedItem = process;
+        }
+    }
+
+    private void ViewModel_InspectModulesRequested(object? sender, ProcessInfo process)
+    {
+        LoadedModulesViewModel modules = new(process, _moduleScanner, path => _viewModel.EjectDllAsync(process, path));
+        LoadedModulesWindow window = new(modules)
+        {
+            Owner = this
+        };
+        window.ShowDialog();
+    }
+
+    private static ProcessInfo? FindProcess(DependencyObject source)
+    {
+        DependencyObject? current = source;
+        while (current is not null)
+        {
+            if (current is FrameworkElement element && element.DataContext is ProcessInfo process)
+            {
+                return process;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
     }
 
     private void ProcessListView_ColumnHeaderClick(object sender, RoutedEventArgs e)

@@ -17,6 +17,10 @@ public sealed class ProcessInfo : INotifyPropertyChanged
     private bool _hasChildren;
     private bool _isExpanded;
     private bool _isContextOnly;
+    private ProcessAccessState _accessState;
+    private string? _graphicsApi;
+    private InjectionBadgeState _injectionState;
+    private IReadOnlyList<string> _injectedDlls = [];
 
     public required int Id { get; init; }
 
@@ -33,6 +37,80 @@ public sealed class ProcessInfo : INotifyPropertyChanged
     public ProcessInstanceKey InstanceKey => new(Id, CreationTime);
 
     public bool HasWindow => !string.IsNullOrWhiteSpace(WindowTitle);
+
+    public bool HasDirect3D => !string.IsNullOrEmpty(GraphicsApi);
+
+    public bool IsInjected => InjectionState != InjectionBadgeState.None;
+
+    public ProcessAccessState AccessState
+    {
+        get => _accessState;
+        set => SetField(ref _accessState, value);
+    }
+
+    public string? GraphicsApi
+    {
+        get => _graphicsApi;
+        set
+        {
+            if (_graphicsApi == value)
+            {
+                return;
+            }
+
+            _graphicsApi = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasDirect3D));
+        }
+    }
+
+    public InjectionBadgeState InjectionState
+    {
+        get => _injectionState;
+        set
+        {
+            if (_injectionState == value)
+            {
+                return;
+            }
+
+            _injectionState = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsInjected));
+            OnPropertyChanged(nameof(InjectionTooltip));
+        }
+    }
+
+    public IReadOnlyList<string> InjectedDlls
+    {
+        get => _injectedDlls;
+        set
+        {
+            if (SamePaths(_injectedDlls, value))
+            {
+                return;
+            }
+
+            _injectedDlls = value ?? [];
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(InjectionTooltip));
+        }
+    }
+
+    public string InjectionTooltip
+    {
+        get
+        {
+            if (_injectedDlls.Count > 0)
+            {
+                return string.Join(Environment.NewLine, _injectedDlls);
+            }
+
+            return _injectionState == InjectionBadgeState.TrackedUnverified
+                ? "Injection recorded, but modules could not be read."
+                : "";
+        }
+    }
 
     public string? WindowTitle
     {
@@ -104,6 +182,34 @@ public sealed class ProcessInfo : INotifyPropertyChanged
         {
             Icon = snapshot.Icon;
         }
+
+        if (snapshot.AccessState != ProcessAccessState.Unknown)
+        {
+            AccessState = snapshot.AccessState;
+        }
+    }
+
+    private static bool SamePaths(IReadOnlyList<string> left, IReadOnlyList<string>? right)
+    {
+        if (right is null)
+        {
+            return left.Count == 0;
+        }
+
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < left.Count; index++)
+        {
+            if (!string.Equals(left[index], right[index], StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
