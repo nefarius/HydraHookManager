@@ -123,9 +123,11 @@ public static class WindowPlacementPolicy
             Math.Max(0, window.Width - CaptionButtonsWidth),
             Math.Min(TitleBarBandHeight, window.Height));
 
+        bool probeIsDraggable = titleBar.Contains(titleBarProbe);
+
         foreach (Rect monitor in monitorWorkAreas)
         {
-            if (monitor.Contains(titleBarProbe))
+            if (probeIsDraggable && monitor.Contains(titleBarProbe))
             {
                 return true;
             }
