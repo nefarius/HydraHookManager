@@ -366,7 +366,9 @@
                       VerticalAlignment="Center"
                       ResizeDirection="Rows"
                       ResizeBehavior="PreviousAndNext"
-                      Background="Transparent" />
+                      Background="Transparent"
+                      DragCompleted="DllPaneSplitter_DragCompleted"
+                      KeyUp="DllPaneSplitter_KeyUp" />
 
         <!-- DLL injection section: height follows the splitter and is saved with the window. -->
         <ui:Card Grid.Row="3" Padding="12" VerticalAlignment="Stretch">

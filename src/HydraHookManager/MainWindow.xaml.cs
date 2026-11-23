@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -127,6 +128,19 @@ public partial class MainWindow : FluentWindow
     private void SnackbarPresenter_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         if (e.HeightChanged)
+        {
+            UpdateDllPaneLimit();
+        }
+    }
+
+    private void DllPaneSplitter_DragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        UpdateDllPaneLimit();
+    }
+
+    private void DllPaneSplitter_KeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.Up or Key.Down)
         {
             UpdateDllPaneLimit();
         }
