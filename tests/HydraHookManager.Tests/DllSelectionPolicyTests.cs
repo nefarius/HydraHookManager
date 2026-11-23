@@ -75,16 +75,21 @@ public class DllSelectionPolicyTests
         ProcessInfo process = TestData.Process(10, "game", "64-bit");
         process.InjectedDlls = [@"C:\tracked.dll"];
 
+        DllItem tracked = Item(@"C:\tracked.dll", DllArchitecture.Unknown, DllFileStatus.Missing);
         DllSelectionPolicy.RefreshSelectionState(
-            [loaded, mismatch, Item(@"C:\tracked.dll", DllArchitecture.Unknown, DllFileStatus.Missing)],
+            [loaded, mismatch, tracked],
             process,
             [new LoadedModuleInfo("a.dll", @"\??\C:\a.dll", 0, 10)]);
 
         Assert.True(loaded.IsLoadedInSelected);
+        Assert.False(tracked.IsLoadedInSelected);
         Assert.False(loaded.IsArchitectureMismatch);
         Assert.True(mismatch.IsArchitectureMismatch);
         Assert.False(mismatch.IsLoadedInSelected);
         Assert.True(mismatch.HasWarning);
+
+        DllSelectionPolicy.RefreshSelectionState([tracked], process, scannedModules: null);
+        Assert.True(tracked.IsLoadedInSelected);
     }
 
     [Theory]

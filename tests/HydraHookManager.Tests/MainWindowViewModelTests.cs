@@ -139,9 +139,13 @@ public class MainWindowViewModelTests
     {
         MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
         viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(p => p.Id == 10);
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.DllItems[0].IsLoadedInSelected = true;
 
         await viewModel.SetFilterAsync("notepad");
         Assert.Null(viewModel.SelectedProcess);
+        Assert.False(viewModel.DllItems[0].IsLoadedInSelected);
+        Assert.Equal("1 checked.", viewModel.DllSelectionSummary);
 
         await viewModel.SetFilterAsync("");
         Assert.Equal(10, viewModel.SelectedProcess?.Id);

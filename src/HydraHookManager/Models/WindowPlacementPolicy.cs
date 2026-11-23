@@ -25,15 +25,30 @@ public static class WindowPlacementPolicy
     public const double DefaultDllPaneHeight = 180;
     public const double MinDllPaneHeight = 130;
     public const double MaxDllPaneHeight = 500;
+    public const double ProcessListMinHeight = 160;
 
     public static double ClampDllPaneHeight(double? height)
     {
-        if (height is not double value || !double.IsFinite(value))
+        return ClampDllPaneHeight(height, double.PositiveInfinity);
+    }
+
+    /// <summary>
+    ///     Keeps the pane inside its fixed limits and inside the height left after the process list and the other rows.
+    /// </summary>
+    public static double ClampDllPaneHeight(double? height, double availableHeight)
+    {
+        double cap = MaxDllPaneHeight;
+        if (double.IsFinite(availableHeight))
         {
-            return DefaultDllPaneHeight;
+            cap = Math.Min(MaxDllPaneHeight, Math.Max(0, availableHeight));
         }
 
-        return Math.Clamp(value, MinDllPaneHeight, MaxDllPaneHeight);
+        double floor = Math.Min(MinDllPaneHeight, cap);
+        double upper = Math.Max(floor, cap);
+        double value = height is double requested && double.IsFinite(requested)
+            ? requested
+            : DefaultDllPaneHeight;
+        return Math.Clamp(value, floor, upper);
     }
 
     private const double TitleBarProbeX = 40;

@@ -78,14 +78,14 @@
             </Style.Triggers>
         </Style>
     </ui:FluentWindow.Resources>
-    <Grid Margin="16">
+    <Grid x:Name="RootLayout" Margin="16" SizeChanged="RootLayout_SizeChanged">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
+            <RowDefinition x:Name="HeaderRow" Height="Auto" />
             <RowDefinition Height="*" MinHeight="160" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition x:Name="DllPaneRow" Height="180" MinHeight="130" MaxHeight="500" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition x:Name="SplitterRow" Height="Auto" />
+            <RowDefinition x:Name="DllPaneRow" Height="180" MinHeight="130" />
+            <RowDefinition x:Name="ActionRow" Height="Auto" />
+            <RowDefinition x:Name="SnackbarRow" Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Header -->

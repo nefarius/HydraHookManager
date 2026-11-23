@@ -88,6 +88,7 @@ public partial class MainWindow : FluentWindow
     private void ApplySavedPlacement()
     {
         DllPaneRow.Height = new GridLength(WindowPlacementPolicy.ClampDllPaneHeight(_viewModel.Settings.DllPaneHeight));
+        UpdateDllPaneLimit();
         if (!WindowPlacementPolicy.TryRead(_viewModel.Settings, out WindowPlacementSnapshot saved))
         {
             return;
@@ -108,6 +109,36 @@ public partial class MainWindow : FluentWindow
         if (placement.State == WindowState.Maximized)
         {
             WindowState = WindowState.Maximized;
+        }
+    }
+
+    private void RootLayout_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.HeightChanged)
+        {
+            UpdateDllPaneLimit();
+        }
+    }
+
+    private void UpdateDllPaneLimit()
+    {
+        if (RootLayout.ActualHeight <= 0)
+        {
+            return;
+        }
+
+        double chrome = HeaderRow.ActualHeight + SplitterRow.ActualHeight + ActionRow.ActualHeight + SnackbarRow.ActualHeight;
+        double available = RootLayout.ActualHeight - chrome - WindowPlacementPolicy.ProcessListMinHeight;
+        double current = DllPaneRow.Height.IsAbsolute
+            ? DllPaneRow.Height.Value
+            : WindowPlacementPolicy.DefaultDllPaneHeight;
+        double capped = WindowPlacementPolicy.ClampDllPaneHeight(current, available);
+        double floor = Math.Min(WindowPlacementPolicy.MinDllPaneHeight, capped);
+        DllPaneRow.MinHeight = floor;
+        DllPaneRow.MaxHeight = Math.Max(floor, Math.Min(WindowPlacementPolicy.MaxDllPaneHeight, Math.Max(0, available)));
+        if (current > DllPaneRow.MaxHeight)
+        {
+            DllPaneRow.Height = new GridLength(capped);
         }
     }
 

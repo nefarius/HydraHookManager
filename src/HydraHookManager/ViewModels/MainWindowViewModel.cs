@@ -974,6 +974,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             _restoringSelection = false;
         }
+
+        RefreshDllSelectionState();
+        UpdateDllSelectionSummary();
     }
 
     private void SyncVisible(List<ProcessViewRow> rows)

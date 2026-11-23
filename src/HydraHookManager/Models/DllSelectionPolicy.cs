@@ -125,6 +125,8 @@ public static class DllSelectionPolicy
             {
                 AddPath(loaded, module.FullPath);
             }
+
+            return loaded;
         }
 
         if (selectedProcess is not null)

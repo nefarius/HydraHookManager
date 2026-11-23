@@ -129,5 +129,8 @@ public class WindowPlacementPolicyTests
         Assert.Equal(WindowPlacementPolicy.MinDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(10));
         Assert.Equal(WindowPlacementPolicy.MaxDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(900));
         Assert.Equal(240, WindowPlacementPolicy.ClampDllPaneHeight(240));
+        Assert.Equal(180, WindowPlacementPolicy.ClampDllPaneHeight(180, 240));
+        Assert.Equal(200, WindowPlacementPolicy.ClampDllPaneHeight(400, 200));
+        Assert.Equal(80, WindowPlacementPolicy.ClampDllPaneHeight(180, 80));
     }
 }
