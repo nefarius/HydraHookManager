@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using HydraHookManager.Models;
 using HydraHookManager.Services;
 using HydraHookManager.ViewModels;
@@ -24,6 +25,8 @@ public partial class MainWindow : FluentWindow
 {
     private readonly MainWindowViewModel _viewModel;
     private readonly IContentDialogService _contentDialogService;
+    private readonly DispatcherTimer _autoRefreshTimer;
+    private WindowState _lastWindowState = WindowState.Normal;
 
     public MainWindow(
         MainWindowViewModel viewModel,
@@ -41,9 +44,14 @@ public partial class MainWindow : FluentWindow
         snackbarService.SetSnackbarPresenter(SnackbarPresenter);
         contentDialogService.SetDialogHost(RootContentDialog);
 
+        _autoRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+        _autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
+
         PreviewKeyDown += MainWindow_PreviewKeyDown;
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
+        StateChanged += MainWindow_StateChanged;
+        Activated += MainWindow_Activated;
         viewModel.PropertyChanged += ViewModel_PropertyChanged;
         viewModel.ExitRequested += (_, _) => Close();
         viewModel.UpdateAvailable += ViewModel_UpdateAvailable;
@@ -55,10 +63,12 @@ public partial class MainWindow : FluentWindow
     {
         await _viewModel.RefreshAsync();
         await _viewModel.CheckForUpdatesAsync(manual: false);
+        UpdateAutoRefreshTimer();
     }
 
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
+        _autoRefreshTimer.Stop();
         _viewModel.CancelPendingWork();
 
         Rect bounds = WindowState == WindowState.Normal
@@ -98,6 +108,60 @@ public partial class MainWindow : FluentWindow
         if (e.PropertyName is nameof(MainWindowViewModel.SortKey) or nameof(MainWindowViewModel.SortDescending))
         {
             UpdateSortIndicators();
+        }
+
+        if (e.PropertyName == nameof(MainWindowViewModel.IsAutoRefreshEnabled))
+        {
+            UpdateAutoRefreshTimer();
+            if (_viewModel.IsAutoRefreshEnabled && WindowState != WindowState.Minimized && IsLoaded)
+            {
+                _ = _viewModel.RefreshIfIdleAsync();
+            }
+        }
+    }
+
+    private async void AutoRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        await _viewModel.RefreshIfIdleAsync();
+    }
+
+    private async void MainWindow_Activated(object? sender, EventArgs e)
+    {
+        if (!_viewModel.IsAutoRefreshEnabled || WindowState == WindowState.Minimized)
+        {
+            return;
+        }
+
+        UpdateAutoRefreshTimer();
+        await _viewModel.RefreshIfIdleAsync();
+    }
+
+    private async void MainWindow_StateChanged(object? sender, EventArgs e)
+    {
+        WindowState previous = _lastWindowState;
+        _lastWindowState = WindowState;
+        UpdateAutoRefreshTimer();
+        if (previous == WindowState.Minimized
+            && WindowState != WindowState.Minimized
+            && _viewModel.IsAutoRefreshEnabled)
+        {
+            await _viewModel.RefreshIfIdleAsync();
+        }
+    }
+
+    private void UpdateAutoRefreshTimer()
+    {
+        bool run = IsLoaded && _viewModel.IsAutoRefreshEnabled && WindowState != WindowState.Minimized;
+        if (run)
+        {
+            if (!_autoRefreshTimer.IsEnabled)
+            {
+                _autoRefreshTimer.Start();
+            }
+        }
+        else
+        {
+            _autoRefreshTimer.Stop();
         }
     }
 

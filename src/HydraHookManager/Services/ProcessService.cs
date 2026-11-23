@@ -19,8 +19,11 @@ public sealed class ProcessService : IProcessService
     private const int PathBufferChars = 1024;
 
     private readonly ConcurrentDictionary<string, ImageSource> _iconCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<ProcessInstanceKey, CachedProcessMetadata> _metadataCache = new();
     private readonly object _defaultIconLock = new();
     private ImageSource? _defaultExeIcon;
+
+    private readonly record struct CachedProcessMetadata(string? ExePath, string Architecture);
 
     public Task<IReadOnlyList<ProcessInfo>> GetProcessesAsync(CancellationToken cancellationToken = default)
     {
@@ -56,6 +59,7 @@ public sealed class ProcessService : IProcessService
     {
         var windowTitles = CollectWindowTitles();
         var processes = new List<ProcessInfo>(512);
+        var seen = new HashSet<ProcessInstanceKey>();
         var snapshot = PInvoke.CreateToolhelp32Snapshot(CREATE_TOOLHELP_SNAPSHOT_FLAGS.TH32CS_SNAPPROCESS, 0);
         if (IsInvalid(snapshot))
             return processes;
@@ -86,10 +90,30 @@ public sealed class ProcessService : IProcessService
                 {
                     try
                     {
-                        exePath = QueryProcessPath(processHandle);
-                        architecture = QueryArchitecture(processHandle);
                         if (TryReadCreationTime(processHandle, out var created))
                             creationTime = created;
+
+                        if (creationTime is long createdAt)
+                        {
+                            var key = new ProcessInstanceKey(unchecked((int)processId), createdAt);
+                            seen.Add(key);
+                            if (_metadataCache.TryGetValue(key, out var cached))
+                            {
+                                exePath = cached.ExePath;
+                                architecture = cached.Architecture;
+                            }
+                            else
+                            {
+                                exePath = QueryProcessPath(processHandle);
+                                architecture = QueryArchitecture(processHandle);
+                                _metadataCache[key] = new CachedProcessMetadata(exePath, architecture);
+                            }
+                        }
+                        else
+                        {
+                            exePath = QueryProcessPath(processHandle);
+                            architecture = QueryArchitecture(processHandle);
+                        }
                     }
                     finally
                     {
@@ -107,6 +131,7 @@ public sealed class ProcessService : IProcessService
                     Id = unchecked((int)processId),
                     Name = ReadExeName(entry.szExeFile),
                     Architecture = architecture,
+                    ParentId = unchecked((int)entry.th32ParentProcessID),
                     Icon = icon,
                     WindowTitle = string.IsNullOrWhiteSpace(windowTitle) ? null : windowTitle,
                     ExePath = exePath,
@@ -118,6 +143,12 @@ public sealed class ProcessService : IProcessService
         finally
         {
             PInvoke.CloseHandle(snapshot);
+        }
+
+        foreach (var key in _metadataCache.Keys)
+        {
+            if (!seen.Contains(key))
+                _metadataCache.TryRemove(key, out _);
         }
 
         processes.Sort(static (left, right) =>

@@ -14,6 +14,12 @@ public sealed class AppSettings
 
     public bool SortDescending { get; set; }
 
+    public bool IsTreeView { get; set; } = true;
+
+    public bool IsAutoRefreshEnabled { get; set; } = true;
+
+    public bool ShowWindowedOnly { get; set; }
+
     public double? WindowLeft { get; set; }
 
     public double? WindowTop { get; set; }

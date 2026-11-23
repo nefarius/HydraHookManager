@@ -18,18 +18,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IUpdateCheckService _updateCheckService;
     private readonly INotificationService _notifications;
     private readonly ILogger<MainWindowViewModel>? _logger;
+    private readonly Dictionary<ProcessInstanceKey, ProcessInfo> _live = [];
+    private readonly HashSet<ProcessInstanceKey> _collapsedKeys = [];
 
-    private IReadOnlyList<ProcessInfo> _processes = [];
+    private List<ProcessInfo> _processes = [];
     private string _filter = "";
     private CancellationTokenSource? _refreshCts;
     private int _refreshVersion;
     private int _filterVersion;
+    private bool _refreshInFlight;
     private int? _selectedProcessId;
     private long? _selectedProcessCreationTime;
+    private string? _selectedExePath;
+    private string? _relaunchExePath;
+    private long? _relaunchCreationTime;
     private bool _restoringSelection;
-
-    [ObservableProperty]
-    private IReadOnlyList<ProcessInfo> _visibleProcesses = [];
 
     [ObservableProperty]
     private ProcessInfo? _selectedProcess;
@@ -51,6 +54,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     private bool _sortDescending;
 
+    [ObservableProperty]
+    private bool _isTreeView;
+
+    [ObservableProperty]
+    private bool _showWindowedOnly;
+
+    [ObservableProperty]
+    private bool _isAutoRefreshEnabled;
+
+    [ObservableProperty]
+    private int _visibleProcessCount;
+
+    [ObservableProperty]
+    private int _totalProcessCount;
+
     public MainWindowViewModel(
         IProcessService processService,
         IInjectorService injectorService,
@@ -71,6 +89,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AppSettings settings = settingsService.Current;
         _sortKey = string.IsNullOrEmpty(settings.SortKey) ? ProcessListPolicy.KeyName : settings.SortKey;
         _sortDescending = settings.SortDescending;
+        _isTreeView = settings.IsTreeView;
+        _showWindowedOnly = settings.ShowWindowedOnly;
+        _isAutoRefreshEnabled = settings.IsAutoRefreshEnabled;
         foreach (string path in settings.DllPaths)
         {
             if (!string.IsNullOrWhiteSpace(path) && !Contains(path))
@@ -79,6 +100,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
         }
     }
+
+    public ObservableCollection<ProcessInfo> VisibleProcesses { get; } = [];
 
     public ObservableCollection<string> DllPaths { get; } = [];
 
@@ -107,6 +130,29 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         _selectedProcessId = value?.Id;
         _selectedProcessCreationTime = value?.CreationTime;
+        _selectedExePath = value?.ExePath;
+        _relaunchExePath = null;
+        _relaunchCreationTime = null;
+    }
+
+    partial void OnIsTreeViewChanged(bool value)
+    {
+        _ = value;
+        PublishView(sameSnapshot: true);
+        SaveSettings();
+    }
+
+    partial void OnShowWindowedOnlyChanged(bool value)
+    {
+        _ = value;
+        PublishView(sameSnapshot: true);
+        SaveSettings();
+    }
+
+    partial void OnIsAutoRefreshEnabledChanged(bool value)
+    {
+        _ = value;
+        SaveSettings();
     }
 
     public void CancelPendingWork()
@@ -120,54 +166,29 @@ public sealed partial class MainWindowViewModel : ObservableObject
         settings.DllPaths = [.. DllPaths];
         settings.SortKey = SortKey;
         settings.SortDescending = SortDescending;
+        settings.IsTreeView = IsTreeView;
+        settings.ShowWindowedOnly = ShowWindowedOnly;
+        settings.IsAutoRefreshEnabled = IsAutoRefreshEnabled;
         _settingsService.Save();
     }
 
     [RelayCommand]
-    public async Task RefreshAsync()
+    public Task RefreshAsync()
     {
-        CancellationTokenSource? previous = _refreshCts;
-        CancellationTokenSource refresh = new();
-        _refreshCts = refresh;
-        previous?.Cancel();
+        return RunRefreshAsync(userInitiated: true);
+    }
 
-        CancellationToken token = refresh.Token;
-        int version = ++_refreshVersion;
-        IsRefreshing = true;
+    /// <summary>
+    ///     Refreshes when no refresh is running. A background tick never cancels a refresh that is already in flight.
+    /// </summary>
+    public Task RefreshIfIdleAsync()
+    {
+        if (_refreshInFlight)
+        {
+            return Task.CompletedTask;
+        }
 
-        try
-        {
-            IReadOnlyList<ProcessInfo> processes = await _processService.GetProcessesAsync(token);
-            token.ThrowIfCancellationRequested();
-            if (version != _refreshVersion)
-            {
-                return;
-            }
-
-            _processes = processes;
-            _filterVersion++;
-            Show(ProcessListPolicy.FilterAndSort(_processes, _filter, SortKey, SortDescending), sameSnapshot: false);
-
-            _ = PopulateIconsAsync(processes, token);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            _logger?.LogError(ex, "Process refresh failed");
-            if (version == _refreshVersion)
-            {
-                _notifications.Show("Process list", ex.Message, NotificationSeverity.Error);
-            }
-        }
-        finally
-        {
-            if (version == _refreshVersion)
-            {
-                IsRefreshing = false;
-            }
-        }
+        return RunRefreshAsync(userInitiated: false);
     }
 
     public async Task SetFilterAsync(string? text)
@@ -175,19 +196,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
         string filter = text?.Trim() ?? "";
         _filter = filter;
         IReadOnlyList<ProcessInfo> snapshot = _processes;
+        ProcessFilterOptions options = new(filter, ShowWindowedOnly);
         string sortKey = SortKey;
         bool descending = SortDescending;
+        bool treeMode = IsTreeView;
+        HashSet<ProcessInstanceKey> collapsed = [.. _collapsedKeys];
         int version = ++_filterVersion;
 
         try
         {
-            List<ProcessInfo> filtered = await Task.Run(() => ProcessListPolicy.FilterAndSort(snapshot, filter, sortKey, descending));
+            List<ProcessViewRow> rows = await Task.Run(() => ProcessListPolicy.BuildView(snapshot, options, sortKey, descending, treeMode, collapsed));
             if (version != _filterVersion || !ReferenceEquals(snapshot, _processes))
             {
                 return;
             }
 
-            Show(filtered, sameSnapshot: true);
+            ApplyView(rows, sameSnapshot: true);
         }
         catch (Exception ex)
         {
@@ -212,9 +236,43 @@ public sealed partial class MainWindowViewModel : ObservableObject
             SortDescending = false;
         }
 
-        _filterVersion++;
-        Show(ProcessListPolicy.FilterAndSort(_processes, _filter, SortKey, SortDescending), sameSnapshot: true);
+        PublishView(sameSnapshot: true);
         SaveSettings();
+    }
+
+    [RelayCommand]
+    private void ToggleWindowedOnly()
+    {
+        ShowWindowedOnly = !ShowWindowedOnly;
+    }
+
+    [RelayCommand]
+    private void ToggleTreeView()
+    {
+        IsTreeView = !IsTreeView;
+    }
+
+    [RelayCommand]
+    private void ToggleAutoRefresh()
+    {
+        IsAutoRefreshEnabled = !IsAutoRefreshEnabled;
+    }
+
+    [RelayCommand]
+    private void ToggleExpand(ProcessInfo? process)
+    {
+        if (process is null || !process.HasChildren)
+        {
+            return;
+        }
+
+        ProcessInstanceKey key = process.InstanceKey;
+        if (!_collapsedKeys.Add(key))
+        {
+            _collapsedKeys.Remove(key);
+        }
+
+        PublishView(sameSnapshot: true);
     }
 
     /// <summary>
@@ -340,6 +398,73 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    private async Task RunRefreshAsync(bool userInitiated)
+    {
+        CancellationTokenSource refreshCts;
+        if (userInitiated)
+        {
+            CancellationTokenSource next = new();
+            CancellationTokenSource? previous = Interlocked.Exchange(ref _refreshCts, next);
+            previous?.Cancel();
+            refreshCts = next;
+        }
+        else
+        {
+            if (_refreshInFlight)
+            {
+                return;
+            }
+
+            if (_refreshCts is not { IsCancellationRequested: false } existing)
+            {
+                _refreshCts = new CancellationTokenSource();
+                existing = _refreshCts;
+            }
+
+            refreshCts = existing;
+        }
+
+        CancellationToken token = refreshCts.Token;
+        int version = Interlocked.Increment(ref _refreshVersion);
+        _refreshInFlight = true;
+        IsRefreshing = true;
+
+        try
+        {
+            IReadOnlyList<ProcessInfo> processes = await _processService.GetProcessesAsync(token);
+            token.ThrowIfCancellationRequested();
+            if (version != _refreshVersion)
+            {
+                return;
+            }
+
+            Reconcile(processes);
+            UpdateTrackedSelection();
+            PublishView(sameSnapshot: false);
+
+            _ = PopulateIconsAsync(_processes, token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Process refresh failed");
+            if (version == _refreshVersion && userInitiated)
+            {
+                _notifications.Show("Process list", ex.Message, NotificationSeverity.Error);
+            }
+        }
+        finally
+        {
+            if (version == _refreshVersion)
+            {
+                _refreshInFlight = false;
+                IsRefreshing = false;
+            }
+        }
+    }
+
     private bool CanRunInjector()
     {
         return !IsOperationRunning;
@@ -426,38 +551,203 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return DllPaths.Any(existing => string.Equals(existing, path, StringComparison.OrdinalIgnoreCase));
     }
 
-    private void Show(List<ProcessInfo> visible, bool sameSnapshot)
+    private void Reconcile(IReadOnlyList<ProcessInfo> snapshot)
+    {
+        List<ProcessInfo> next = new(snapshot.Count);
+        HashSet<ProcessInstanceKey> seen = new(snapshot.Count);
+        foreach (ProcessInfo incoming in snapshot)
+        {
+            ProcessInstanceKey key = incoming.InstanceKey;
+            if (!seen.Add(key))
+            {
+                continue;
+            }
+
+            if (_live.TryGetValue(key, out ProcessInfo? existing))
+            {
+                existing.UpdateFrom(incoming);
+                next.Add(existing);
+            }
+            else
+            {
+                _live[key] = incoming;
+                next.Add(incoming);
+            }
+        }
+
+        List<ProcessInstanceKey> stale = [];
+        foreach (ProcessInstanceKey key in _live.Keys)
+        {
+            if (!seen.Contains(key))
+            {
+                stale.Add(key);
+            }
+        }
+
+        foreach (ProcessInstanceKey key in stale)
+        {
+            _live.Remove(key);
+        }
+
+        _processes = next;
+    }
+
+    private void UpdateTrackedSelection()
+    {
+        if (_selectedProcessId is int selectedId)
+        {
+            ProcessInfo? sameInstance = null;
+            foreach (ProcessInfo process in _processes)
+            {
+                if (process.Id == selectedId && process.CreationTime == _selectedProcessCreationTime)
+                {
+                    sameInstance = process;
+                    break;
+                }
+            }
+
+            if (sameInstance is null)
+            {
+                if (!string.IsNullOrWhiteSpace(_selectedExePath))
+                {
+                    _relaunchExePath = _selectedExePath;
+                    _relaunchCreationTime = _selectedProcessCreationTime;
+                }
+
+                _selectedProcessId = null;
+                _selectedProcessCreationTime = null;
+            }
+            else if (!IsSelectionStillValid(selectedId, _selectedProcessCreationTime))
+            {
+                _selectedProcessId = null;
+                _selectedProcessCreationTime = null;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(_relaunchExePath))
+        {
+            return;
+        }
+
+        ProcessInfo? relaunched = ProcessListPolicy.FindRelaunchedInstance(_processes, _relaunchExePath, _relaunchCreationTime);
+        if (relaunched?.CreationTime is not long relaunchCreated)
+        {
+            return;
+        }
+
+        if (!IsSelectionStillValid(relaunched.Id, relaunchCreated))
+        {
+            return;
+        }
+
+        _selectedProcessId = relaunched.Id;
+        _selectedProcessCreationTime = relaunchCreated;
+        _selectedExePath = relaunched.ExePath;
+        _relaunchExePath = null;
+        _relaunchCreationTime = null;
+    }
+
+    private void PublishView(bool sameSnapshot)
+    {
+        _filterVersion++;
+        List<ProcessViewRow> rows = ProcessListPolicy.BuildView(
+            _processes,
+            new ProcessFilterOptions(_filter, ShowWindowedOnly),
+            SortKey,
+            SortDescending,
+            IsTreeView,
+            _collapsedKeys);
+        ApplyView(rows, sameSnapshot);
+    }
+
+    private void ApplyView(List<ProcessViewRow> rows, bool sameSnapshot)
+    {
+        foreach (ProcessViewRow row in rows)
+        {
+            ProcessInfo process = row.Process;
+            process.Depth = row.Depth;
+            process.HasChildren = row.HasChildren;
+            process.IsExpanded = row.IsExpanded;
+            process.IsContextOnly = row.IsContextOnly;
+        }
+
+        SyncVisible(rows);
+        VisibleProcessCount = rows.Count;
+        TotalProcessCount = _processes.Count;
+        RestoreSelection(sameSnapshot);
+    }
+
+    private void SyncVisible(List<ProcessViewRow> rows)
+    {
+        for (int index = 0; index < rows.Count; index++)
+        {
+            ProcessInfo desired = rows[index].Process;
+            if (index < VisibleProcesses.Count && ReferenceEquals(VisibleProcesses[index], desired))
+            {
+                continue;
+            }
+
+            int existing = -1;
+            for (int scan = index + 1; scan < VisibleProcesses.Count; scan++)
+            {
+                if (ReferenceEquals(VisibleProcesses[scan], desired))
+                {
+                    existing = scan;
+                    break;
+                }
+            }
+
+            if (existing >= 0)
+            {
+                VisibleProcesses.Move(existing, index);
+            }
+            else
+            {
+                VisibleProcesses.Insert(index, desired);
+            }
+        }
+
+        while (VisibleProcesses.Count > rows.Count)
+        {
+            VisibleProcesses.RemoveAt(VisibleProcesses.Count - 1);
+        }
+    }
+
+    private void RestoreSelection(bool sameSnapshot)
     {
         int? selectedId = _selectedProcessId;
         long? selectedCreationTime = _selectedProcessCreationTime;
+        ProcessInfo? match = null;
 
-        // Replacing the list can select another row before the saved process is restored.
-        _restoringSelection = true;
-        try
+        if (selectedId is int id)
         {
-            VisibleProcesses = visible;
-            SelectedProcess = null;
-
-            if (selectedId is not int id)
-            {
-                return;
-            }
-
             if (!sameSnapshot && !IsSelectionStillValid(id, selectedCreationTime))
             {
                 _selectedProcessId = null;
                 _selectedProcessCreationTime = null;
-                return;
             }
-
-            foreach (ProcessInfo process in visible)
+            else
             {
-                if (process.Id == id)
+                foreach (ProcessInfo process in VisibleProcesses)
                 {
-                    SelectedProcess = process;
-                    break;
+                    if (process.Id == id)
+                    {
+                        match = process;
+                        break;
+                    }
                 }
             }
+        }
+
+        if (ReferenceEquals(SelectedProcess, match))
+        {
+            return;
+        }
+
+        _restoringSelection = true;
+        try
+        {
+            SelectedProcess = match;
         }
         finally
         {

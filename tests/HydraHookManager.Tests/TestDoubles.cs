@@ -5,7 +5,15 @@ namespace HydraHookManager.Tests;
 
 internal static class TestData
 {
-    public static ProcessInfo Process(int id, string name, string architecture = "64-bit", string? window = null, long? created = null)
+    public static ProcessInfo Process(
+        int id,
+        string name,
+        string architecture = "64-bit",
+        string? window = null,
+        long? created = null,
+        int parentId = 0,
+        string? exePath = null,
+        bool omitCreationTime = false)
     {
         return new ProcessInfo
         {
@@ -13,7 +21,9 @@ internal static class TestData
             Name = name,
             Architecture = architecture,
             WindowTitle = window,
-            CreationTime = created ?? id * 1000L
+            CreationTime = omitCreationTime ? null : created ?? id * 1000L,
+            ParentId = parentId,
+            ExePath = exePath
         };
     }
 }

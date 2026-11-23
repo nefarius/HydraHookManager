@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:local="clr-namespace:HydraHookManager"
+        xmlns:views="clr-namespace:HydraHookManager.Views"
         xmlns:vm="clr-namespace:HydraHookManager.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -15,6 +16,9 @@
         mc:Ignorable="d">
     <ui:FluentWindow.Resources>
         <BooleanToVisibilityConverter x:Key="BooleanToVisibility" />
+        <views:DepthToMarginConverter x:Key="DepthToMargin" />
+        <views:BoolToAppearanceConverter x:Key="BoolToAppearance" />
+        <views:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibility" />
         <Style x:Key="ProcessItemStyle" TargetType="ui:ListViewItem">
             <Setter Property="Height" Value="30" />
             <Setter Property="Margin" Value="0,0,0,1" />
@@ -63,6 +67,11 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsContextOnly}" Value="True">
+                    <Setter Property="Opacity" Value="0.55" />
+                </DataTrigger>
+            </Style.Triggers>
         </Style>
     </ui:FluentWindow.Resources>
     <Grid Margin="16">
@@ -86,17 +95,44 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="12,12,12,8">
+                <Grid Grid.Row="0" Margin="12,12,12,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MinWidth="140" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
                     <ui:TextBox x:Name="ProcessFilterBox"
-                               PlaceholderText="Filter by name..."
-                               Width="200"
+                               Grid.Column="0"
+                               PlaceholderText="Filter by name, window, PID, or path..."
                                Margin="0,0,8,0"
                                TextChanged="ProcessFilterBox_TextChanged" />
-                    <ui:Button x:Name="RefreshButton"
-                               Content="Refresh"
-                               Icon="{ui:SymbolIcon ArrowSync24}"
-                               Command="{Binding RefreshCommand}" />
-                </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <ui:Button Content="Windowed"
+                                   Margin="0,0,8,0"
+                                   ToolTip="Show only processes with a visible window"
+                                   Appearance="{Binding ShowWindowedOnly, Converter={StaticResource BoolToAppearance}}"
+                                   Command="{Binding ToggleWindowedOnlyCommand}" />
+                        <ui:Button Content="Tree"
+                                   Margin="0,0,8,0"
+                                   ToolTip="Group processes under the process that started them"
+                                   Appearance="{Binding IsTreeView, Converter={StaticResource BoolToAppearance}}"
+                                   Command="{Binding ToggleTreeViewCommand}" />
+                        <ui:Button Content="Auto"
+                                   Margin="0,0,8,0"
+                                   ToolTip="Refresh the list automatically while this window is open"
+                                   Appearance="{Binding IsAutoRefreshEnabled, Converter={StaticResource BoolToAppearance}}"
+                                   Command="{Binding ToggleAutoRefreshCommand}" />
+                        <ui:Button x:Name="RefreshButton"
+                                   Content="Refresh"
+                                   Icon="{ui:SymbolIcon ArrowSync24}"
+                                   Command="{Binding RefreshCommand}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                        <TextBlock Text="{Binding VisibleProcessCount, Mode=OneWay}" VerticalAlignment="Center" />
+                        <TextBlock Text=" / " VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding TotalProcessCount, Mode=OneWay}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Grid>
                 <ui:ListView x:Name="ProcessListView"
                              Grid.Row="1"
                              Margin="12,0,12,12"
@@ -150,11 +186,51 @@
                                                MinWidth="160">
                                 <ui:GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding Name, Mode=OneTime}"
-                                                   Margin="6,0"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   TextWrapping="NoWrap"
-                                                   VerticalAlignment="Center" />
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                                    Margin="{Binding Depth, Converter={StaticResource DepthToMargin}}">
+                                            <Grid Width="16" Height="16" Margin="0,0,2,0" VerticalAlignment="Center">
+                                                <Grid.Style>
+                                                    <Style TargetType="Grid">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding DataContext.IsTreeView, RelativeSource={RelativeSource AncestorType=ui:ListView}}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Grid.Style>
+                                                <ui:Button Width="16"
+                                                           Height="16"
+                                                           MinWidth="16"
+                                                           MinHeight="16"
+                                                           Padding="0"
+                                                           BorderThickness="0"
+                                                           Focusable="False"
+                                                           Appearance="Transparent"
+                                                           VerticalAlignment="Center"
+                                                           HorizontalAlignment="Center"
+                                                           Command="{Binding DataContext.ToggleExpandCommand, RelativeSource={RelativeSource AncestorType=ui:ListView}}"
+                                                           CommandParameter="{Binding}"
+                                                           Visibility="{Binding HasChildren, Converter={StaticResource BooleanToVisibility}}">
+                                                    <Grid>
+                                                        <ui:SymbolIcon Symbol="ChevronRight24"
+                                                                       FontSize="12"
+                                                                       HorizontalAlignment="Center"
+                                                                       VerticalAlignment="Center"
+                                                                       Visibility="{Binding IsExpanded, Converter={StaticResource InverseBooleanToVisibility}}" />
+                                                        <ui:SymbolIcon Symbol="ChevronDown24"
+                                                                       FontSize="12"
+                                                                       HorizontalAlignment="Center"
+                                                                       VerticalAlignment="Center"
+                                                                       Visibility="{Binding IsExpanded, Converter={StaticResource BooleanToVisibility}}" />
+                                                    </Grid>
+                                                </ui:Button>
+                                            </Grid>
+                                            <TextBlock Text="{Binding Name, Mode=OneTime}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       TextWrapping="NoWrap"
+                                                       VerticalAlignment="Center" />
+                                        </StackPanel>
                                     </DataTemplate>
                                 </ui:GridViewColumn.CellTemplate>
                             </ui:GridViewColumn>
@@ -173,7 +249,7 @@
                             <ui:GridViewColumn local:ProcessSort.Key="Architecture"
                                                local:ProcessSort.Label="Arch"
                                                Header="Arch"
-                                               Width="72">
+                                               Width="96">
                                 <ui:GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Architecture, Mode=OneTime}"
@@ -190,7 +266,7 @@
                                                MinWidth="180">
                                 <ui:GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <TextBlock Text="{Binding WindowTitle, Mode=OneTime}"
+                                        <TextBlock Text="{Binding WindowTitle, Mode=OneWay}"
                                                    Margin="6,0"
                                                    TextTrimming="CharacterEllipsis"
                                                    TextWrapping="NoWrap"
