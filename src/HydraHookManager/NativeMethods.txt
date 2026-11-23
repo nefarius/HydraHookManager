@@ -13,3 +13,9 @@ GetWindowTextLengthW
 GetWindowTextW
 ExtractIconExW
 DestroyIcon
+EnumProcessModulesEx
+GetModuleFileNameExW
+GetModuleInformation
+IsIconic
+ShowWindow
+SetForegroundWindow

@@ -20,6 +20,10 @@ public sealed class AppSettings
 
     public bool ShowWindowedOnly { get; set; }
 
+    public bool ShowDirect3DOnly { get; set; }
+
+    public bool ShowInjectedOnly { get; set; }
+
     public double? WindowLeft { get; set; }
 
     public double? WindowTop { get; set; }

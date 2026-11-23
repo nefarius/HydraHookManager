@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -17,13 +18,21 @@ namespace HydraHookManager.Services;
 public sealed class ProcessService : IProcessService
 {
     private const int PathBufferChars = 1024;
+    private const int ErrorAccessDenied = 5;
+    private const int ErrorNoMoreFiles = 18;
 
+    private readonly IElevationService _elevation;
     private readonly ConcurrentDictionary<string, ImageSource> _iconCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<ProcessInstanceKey, CachedProcessMetadata> _metadataCache = new();
     private readonly object _defaultIconLock = new();
     private ImageSource? _defaultExeIcon;
 
     private readonly record struct CachedProcessMetadata(string? ExePath, string Architecture);
+
+    public ProcessService(IElevationService elevation)
+    {
+        _elevation = elevation;
+    }
 
     public Task<IReadOnlyList<ProcessInfo>> GetProcessesAsync(CancellationToken cancellationToken = default)
     {
@@ -55,6 +64,27 @@ public sealed class ProcessService : IProcessService
         }
     }
 
+    public bool TryBringWindowToFront(int processId)
+    {
+        if (processId <= 0)
+        {
+            return false;
+        }
+
+        HWND window = FindMainWindow((uint)processId);
+        if (window.IsNull)
+        {
+            return false;
+        }
+
+        if (PInvoke.IsIconic(window))
+        {
+            _ = PInvoke.ShowWindow(window, SHOW_WINDOW_CMD.SW_RESTORE);
+        }
+
+        return PInvoke.SetForegroundWindow(window);
+    }
+
     private unsafe IReadOnlyList<ProcessInfo> EnumerateProcesses(CancellationToken cancellationToken)
     {
         var windowTitles = CollectWindowTitles();
@@ -62,7 +92,7 @@ public sealed class ProcessService : IProcessService
         var seen = new HashSet<ProcessInstanceKey>();
         var snapshot = PInvoke.CreateToolhelp32Snapshot(CREATE_TOOLHELP_SNAPSHOT_FLAGS.TH32CS_SNAPPROCESS, 0);
         if (IsInvalid(snapshot))
-            return processes;
+            throw new Win32Exception(Marshal.GetLastWin32Error());
 
         try
         {
@@ -72,73 +102,97 @@ public sealed class ProcessService : IProcessService
             };
 
             if (!PInvoke.Process32FirstW(snapshot, &entry))
-                return processes;
+            {
+                var error = Marshal.GetLastWin32Error();
+                if (error == ErrorNoMoreFiles)
+                    return processes;
 
-            do
+                throw new Win32Exception(error);
+            }
+
+            while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var processId = entry.th32ProcessID;
-                if (processId == 0)
-                    continue;
-
-                string? exePath = null;
-                var architecture = "Unknown";
-                long? creationTime = null;
-                var processHandle = PInvoke.OpenProcess(PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
-                if (!IsInvalid(processHandle))
+                if (processId != 0)
                 {
-                    try
+                    string? exePath = null;
+                    var architecture = "Unknown";
+                    long? creationTime = null;
+                    ProcessAccessState access = ProcessAccessState.Unknown;
+                    var processHandle = PInvoke.OpenProcess(PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+                    if (IsInvalid(processHandle))
                     {
-                        if (TryReadCreationTime(processHandle, out var created))
-                            creationTime = created;
-
-                        if (creationTime is long createdAt)
+                        if (Marshal.GetLastWin32Error() == ErrorAccessDenied)
                         {
-                            var key = new ProcessInstanceKey(unchecked((int)processId), createdAt);
-                            seen.Add(key);
-                            if (_metadataCache.TryGetValue(key, out var cached))
+                            access = _elevation.IsElevated ? ProcessAccessState.Protected : ProcessAccessState.RequiresAdmin;
+                        }
+                    }
+                    else
+                    {
+                        access = ProcessAccessState.Accessible;
+                        try
+                        {
+                            if (TryReadCreationTime(processHandle, out var created))
+                                creationTime = created;
+
+                            if (creationTime is long createdAt)
                             {
-                                exePath = cached.ExePath;
-                                architecture = cached.Architecture;
+                                var key = new ProcessInstanceKey(unchecked((int)processId), createdAt);
+                                seen.Add(key);
+                                if (_metadataCache.TryGetValue(key, out var cached))
+                                {
+                                    exePath = cached.ExePath;
+                                    architecture = cached.Architecture;
+                                }
+                                else
+                                {
+                                    exePath = QueryProcessPath(processHandle);
+                                    architecture = QueryArchitecture(processHandle);
+                                    _metadataCache[key] = new CachedProcessMetadata(exePath, architecture);
+                                }
                             }
                             else
                             {
                                 exePath = QueryProcessPath(processHandle);
                                 architecture = QueryArchitecture(processHandle);
-                                _metadataCache[key] = new CachedProcessMetadata(exePath, architecture);
                             }
                         }
-                        else
+                        finally
                         {
-                            exePath = QueryProcessPath(processHandle);
-                            architecture = QueryArchitecture(processHandle);
+                            PInvoke.CloseHandle(processHandle);
                         }
                     }
-                    finally
+
+                    windowTitles.TryGetValue(processId, out var windowTitle);
+                    ImageSource? icon = null;
+                    if (exePath is not null)
+                        _iconCache.TryGetValue(exePath, out icon);
+
+                    processes.Add(new ProcessInfo
                     {
-                        PInvoke.CloseHandle(processHandle);
-                    }
+                        Id = unchecked((int)processId),
+                        Name = ReadExeName(entry.szExeFile),
+                        Architecture = architecture,
+                        ParentId = unchecked((int)entry.th32ParentProcessID),
+                        Icon = icon,
+                        WindowTitle = string.IsNullOrWhiteSpace(windowTitle) ? null : windowTitle,
+                        ExePath = exePath,
+                        CreationTime = creationTime,
+                        AccessState = access
+                    });
                 }
 
-                windowTitles.TryGetValue(processId, out var windowTitle);
-                ImageSource? icon = null;
-                if (exePath is not null)
-                    _iconCache.TryGetValue(exePath, out icon);
+                if (PInvoke.Process32NextW(snapshot, &entry))
+                    continue;
 
-                processes.Add(new ProcessInfo
-                {
-                    Id = unchecked((int)processId),
-                    Name = ReadExeName(entry.szExeFile),
-                    Architecture = architecture,
-                    ParentId = unchecked((int)entry.th32ParentProcessID),
-                    Icon = icon,
-                    WindowTitle = string.IsNullOrWhiteSpace(windowTitle) ? null : windowTitle,
-                    ExePath = exePath,
-                    CreationTime = creationTime
-                });
+                var error = Marshal.GetLastWin32Error();
+                if (error != ErrorNoMoreFiles)
+                    throw new Win32Exception(error);
+
+                break;
             }
-            while (PInvoke.Process32NextW(snapshot, &entry));
         }
         finally
         {
@@ -352,6 +406,36 @@ public sealed class ProcessService : IProcessService
 
         _ = PInvoke.EnumWindows(Callback, default);
         return titles;
+    }
+
+    private static unsafe HWND FindMainWindow(uint processId)
+    {
+        HWND found = HWND.Null;
+
+        unsafe BOOL Callback(HWND hwnd, LPARAM lParam)
+        {
+            if (found != HWND.Null || !PInvoke.IsWindowVisible(hwnd))
+            {
+                return true;
+            }
+
+            if (PInvoke.GetWindow(hwnd, GET_WINDOW_CMD.GW_OWNER) != HWND.Null)
+            {
+                return true;
+            }
+
+            _ = PInvoke.GetWindowThreadProcessId(hwnd, out uint ownerId);
+            if (ownerId != processId || PInvoke.GetWindowTextLength(hwnd) <= 0)
+            {
+                return true;
+            }
+
+            found = hwnd;
+            return false;
+        }
+
+        _ = PInvoke.EnumWindows(Callback, default);
+        return found;
     }
 
     private static unsafe bool TryReadCreationTime(HANDLE process, out long creationTime)

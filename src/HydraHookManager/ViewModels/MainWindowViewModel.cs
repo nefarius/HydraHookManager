@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HydraHookManager.Models;
@@ -17,9 +19,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IElevationService _elevationService;
     private readonly IUpdateCheckService _updateCheckService;
     private readonly INotificationService _notifications;
+    private readonly IModuleScannerService _moduleScanner;
+    private readonly IInjectionStateService _injectionState;
     private readonly ILogger<MainWindowViewModel>? _logger;
     private readonly Dictionary<ProcessInstanceKey, ProcessInfo> _live = [];
+    private readonly Dictionary<ProcessInstanceKey, ModuleScanResult> _scans = [];
+    private readonly Dictionary<ProcessInstanceKey, long> _lastScanTicks = [];
+    private readonly Dictionary<ProcessInstanceKey, ProcessInjectionMark> _marks = [];
     private readonly HashSet<ProcessInstanceKey> _collapsedKeys = [];
+    private readonly object _ledgerLock = new();
 
     private List<ProcessInfo> _processes = [];
     private string _filter = "";
@@ -33,6 +41,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string? _relaunchExePath;
     private long? _relaunchCreationTime;
     private bool _restoringSelection;
+    private CancellationTokenSource? _scanCts;
+    private int _scanVersion;
+    private bool _scanInFlight;
+    private bool _hasProcessSnapshot;
 
     [ObservableProperty]
     private ProcessInfo? _selectedProcess;
@@ -46,6 +58,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(InjectCommand))]
     [NotifyCanExecuteChangedFor(nameof(EjectCommand))]
+    [NotifyCanExecuteChangedFor(nameof(EjectDllCommand))]
     private bool _isOperationRunning;
 
     [ObservableProperty]
@@ -59,6 +72,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _showWindowedOnly;
+
+    [ObservableProperty]
+    private bool _showDirect3DOnly;
+
+    [ObservableProperty]
+    private bool _showInjectedOnly;
 
     [ObservableProperty]
     private bool _isAutoRefreshEnabled;
@@ -76,6 +95,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IElevationService elevationService,
         IUpdateCheckService updateCheckService,
         INotificationService notifications,
+        IModuleScannerService moduleScanner,
+        IInjectionStateService injectionState,
         ILogger<MainWindowViewModel>? logger = null)
     {
         _processService = processService;
@@ -84,6 +105,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _elevationService = elevationService;
         _updateCheckService = updateCheckService;
         _notifications = notifications;
+        _moduleScanner = moduleScanner;
+        _injectionState = injectionState;
         _logger = logger;
 
         AppSettings settings = settingsService.Current;
@@ -91,6 +114,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _sortDescending = settings.SortDescending;
         _isTreeView = settings.IsTreeView;
         _showWindowedOnly = settings.ShowWindowedOnly;
+        _showDirect3DOnly = settings.ShowDirect3DOnly;
+        _showInjectedOnly = settings.ShowInjectedOnly;
         _isAutoRefreshEnabled = settings.IsAutoRefreshEnabled;
         foreach (string path in settings.DllPaths)
         {
@@ -121,6 +146,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     /// </summary>
     public event EventHandler<UpdateCheckResult>? UpdateAvailable;
 
+    /// <summary>
+    ///     Raised when the view should open the loaded-modules inspector for a process.
+    /// </summary>
+    public event EventHandler<ProcessInfo>? InspectModulesRequested;
+
     partial void OnSelectedProcessChanged(ProcessInfo? value)
     {
         if (_restoringSelection)
@@ -133,6 +163,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _selectedExePath = value?.ExePath;
         _relaunchExePath = null;
         _relaunchCreationTime = null;
+        if (value is not null)
+        {
+            StartModuleScan(forceAll: false, forceKey: value.InstanceKey);
+        }
     }
 
     partial void OnIsTreeViewChanged(bool value)
@@ -149,6 +183,26 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SaveSettings();
     }
 
+    partial void OnShowDirect3DOnlyChanged(bool value)
+    {
+        PublishView(sameSnapshot: true);
+        SaveSettings();
+        if (value)
+        {
+            StartModuleScan(forceAll: true, forceKey: null);
+        }
+    }
+
+    partial void OnShowInjectedOnlyChanged(bool value)
+    {
+        PublishView(sameSnapshot: true);
+        SaveSettings();
+        if (value)
+        {
+            StartModuleScan(forceAll: true, forceKey: null);
+        }
+    }
+
     partial void OnIsAutoRefreshEnabledChanged(bool value)
     {
         _ = value;
@@ -158,6 +212,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void CancelPendingWork()
     {
         _refreshCts?.Cancel();
+        _scanCts?.Cancel();
     }
 
     public void SaveSettings()
@@ -168,6 +223,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         settings.SortDescending = SortDescending;
         settings.IsTreeView = IsTreeView;
         settings.ShowWindowedOnly = ShowWindowedOnly;
+        settings.ShowDirect3DOnly = ShowDirect3DOnly;
+        settings.ShowInjectedOnly = ShowInjectedOnly;
         settings.IsAutoRefreshEnabled = IsAutoRefreshEnabled;
         _settingsService.Save();
     }
@@ -196,7 +253,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         string filter = text?.Trim() ?? "";
         _filter = filter;
         IReadOnlyList<ProcessInfo> snapshot = _processes;
-        ProcessFilterOptions options = new(filter, ShowWindowedOnly);
+        ProcessFilterOptions options = CurrentFilter(filter);
         string sortKey = SortKey;
         bool descending = SortDescending;
         bool treeMode = IsTreeView;
@@ -244,6 +301,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private void ToggleWindowedOnly()
     {
         ShowWindowedOnly = !ShowWindowedOnly;
+    }
+
+    [RelayCommand]
+    private void ToggleDirect3DOnly()
+    {
+        ShowDirect3DOnly = !ShowDirect3DOnly;
+    }
+
+    [RelayCommand]
+    private void ToggleInjectedOnly()
+    {
+        ShowInjectedOnly = !ShowInjectedOnly;
     }
 
     [RelayCommand]
@@ -295,6 +364,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (added > 0)
         {
             SaveSettings();
+            ApplyLedgerAndMarks();
+            if (ShowInjectedOnly)
+            {
+                PublishView(sameSnapshot: true);
+            }
         }
 
         return added;
@@ -307,6 +381,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             SelectedDll = null;
             SaveSettings();
+            ApplyLedgerAndMarks();
+            if (ShowInjectedOnly)
+            {
+                PublishView(sameSnapshot: true);
+            }
         }
     }
 
@@ -320,6 +399,100 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public Task EjectAsync()
     {
         return RunInjectorAsync(eject: true);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRunInjector))]
+    private Task EjectDll(string? dllPath)
+    {
+        return EjectDllAsync(SelectedProcess, dllPath);
+    }
+
+    public Task<bool> EjectDllAsync(ProcessInfo? process, string? dllPath)
+    {
+        if (IsOperationRunning)
+        {
+            _notifications.Show("Operation running", "Wait for the current injector operation to finish.", NotificationSeverity.Warning);
+            return Task.FromResult(false);
+        }
+
+        if (process is null || string.IsNullOrWhiteSpace(dllPath))
+        {
+            _notifications.Show("Select process", "Please select a process from the list.", NotificationSeverity.Warning);
+            return Task.FromResult(false);
+        }
+
+        return EjectSpecificAsync(process, dllPath);
+    }
+
+    [RelayCommand]
+    private void InspectModules()
+    {
+        if (SelectedProcess is not ProcessInfo selected)
+        {
+            _notifications.Show("Select process", "Please select a process from the list.", NotificationSeverity.Warning);
+            return;
+        }
+
+        InspectModulesRequested?.Invoke(this, selected);
+    }
+
+    [RelayCommand]
+    private void BringWindowToFront()
+    {
+        if (SelectedProcess is not ProcessInfo selected)
+        {
+            _notifications.Show("Select process", "Please select a process from the list.", NotificationSeverity.Warning);
+            return;
+        }
+
+        if (!_processService.TryBringWindowToFront(selected.Id))
+        {
+            _notifications.Show("Window", "Could not bring that process window to the front.", NotificationSeverity.Warning);
+        }
+    }
+
+    [RelayCommand]
+    private void OpenFileLocation()
+    {
+        if (SelectedProcess is not ProcessInfo selected || string.IsNullOrWhiteSpace(selected.ExePath))
+        {
+            _notifications.Show("File location", "This process has no executable path.", NotificationSeverity.Warning);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{selected.ExePath}\"") { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Could not open the file location for {Path}", selected.ExePath);
+            _notifications.Show("File location", "Could not open the executable location.", NotificationSeverity.Warning);
+        }
+    }
+
+    [RelayCommand]
+    private void CopyPid()
+    {
+        if (SelectedProcess is not ProcessInfo selected)
+        {
+            _notifications.Show("Copy", "Please select a process from the list.", NotificationSeverity.Warning);
+            return;
+        }
+
+        CopyText(selected.Id.ToString(CultureInfo.InvariantCulture));
+    }
+
+    [RelayCommand]
+    private void CopyPath()
+    {
+        if (SelectedProcess is not ProcessInfo selected || string.IsNullOrWhiteSpace(selected.ExePath))
+        {
+            _notifications.Show("Copy", "This process has no executable path.", NotificationSeverity.Warning);
+            return;
+        }
+
+        CopyText(selected.ExePath);
     }
 
     [RelayCommand]
@@ -440,7 +613,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
             Reconcile(processes);
             UpdateTrackedSelection();
+            _hasProcessSnapshot = true;
+            ApplyLedgerAndMarks();
             PublishView(sameSnapshot: false);
+            StartModuleScan(forceAll: userInitiated, forceKey: null);
 
             _ = PopulateIconsAsync(_processes, token);
         }
@@ -487,13 +663,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         // Guard against PID reuse between the last refresh and this click.
         // Unreadable creation times (e.g. protected processes) are allowed through so the injector can report the real error.
-        if (selected.CreationTime is long expectedCreationTime
-            && _processService.TryGetProcessCreationTime(selected.Id, out long liveCreationTime)
-            && liveCreationTime != expectedCreationTime)
+        if (RejectStaleSelection(selected))
         {
-            _notifications.Show("Process changed", "The selected process is no longer running. The list was refreshed.", NotificationSeverity.Warning);
-            SelectedProcess = null;
-            await RefreshAsync();
             return;
         }
 
@@ -510,6 +681,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             string message = BuildMessage(result);
             if (result.Success)
             {
+                RememberInjection(selected, dlls, eject);
+                StartModuleScan(forceAll: false, forceKey: selected.InstanceKey);
                 _notifications.Show($"{verb} successful", message, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
             }
             else
@@ -649,7 +822,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _filterVersion++;
         List<ProcessViewRow> rows = ProcessListPolicy.BuildView(
             _processes,
-            new ProcessFilterOptions(_filter, ShowWindowedOnly),
+            CurrentFilter(_filter),
             SortKey,
             SortDescending,
             IsTreeView,
@@ -768,6 +941,254 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ProcessInfo? candidate = _processes.FirstOrDefault(process => process.Id == processId);
         long? live = _processService.TryGetProcessCreationTime(processId, out long creationTime) ? creationTime : null;
         return ProcessListPolicy.IsSameInstance(candidate, expectedCreationTime, live);
+    }
+
+    private ProcessFilterOptions CurrentFilter(string? text)
+    {
+        return new ProcessFilterOptions(text, ShowWindowedOnly, ShowDirect3DOnly, ShowInjectedOnly);
+    }
+
+    private bool RejectStaleSelection(ProcessInfo selected)
+    {
+        if (selected.CreationTime is long expectedCreationTime
+            && _processService.TryGetProcessCreationTime(selected.Id, out long liveCreationTime)
+            && liveCreationTime != expectedCreationTime)
+        {
+            _notifications.Show("Process changed", "The selected process is no longer running. The list was refreshed.", NotificationSeverity.Warning);
+            SelectedProcess = null;
+            _ = RefreshAsync();
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> EjectSpecificAsync(ProcessInfo selected, string dllPath)
+    {
+        if (RejectStaleSelection(selected))
+        {
+            return false;
+        }
+
+        IsOperationRunning = true;
+        try
+        {
+            InjectResult result = await _injectorService.EjectAsync(selected.Id, ProcessListPolicy.Is64Bit(selected), [dllPath]);
+            string message = BuildMessage(result);
+            if (!result.Success)
+            {
+                if (!_elevationService.IsElevated && LooksLikeAccessProblem(message))
+                {
+                    message += "\n\nThe target process may require administrator rights. Use \"Restart as Admin\" and try again.";
+                }
+
+                _notifications.Show("Ejection failed", message, NotificationSeverity.Error, TimeSpan.FromSeconds(8));
+                return false;
+            }
+
+            RememberInjection(selected, [dllPath], eject: true);
+            StartModuleScan(forceAll: false, forceKey: selected.InstanceKey);
+            _notifications.Show("Ejection successful", message, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
+            return true;
+        }
+        finally
+        {
+            IsOperationRunning = false;
+        }
+    }
+
+    private void RememberInjection(ProcessInfo selected, IReadOnlyList<string> dlls, bool eject)
+    {
+        lock (_ledgerLock)
+        {
+            _scans.Remove(selected.InstanceKey);
+            _lastScanTicks.Remove(selected.InstanceKey);
+            bool changed = eject
+                ? InjectionLedgerPolicy.RecordEject(_injectionState.Current.Entries, selected.Id, selected.CreationTime, dlls)
+                : InjectionLedgerPolicy.RecordInject(_injectionState.Current.Entries, selected.Id, selected.CreationTime, selected.ExePath, dlls);
+            if (changed)
+            {
+                _injectionState.Save();
+            }
+        }
+    }
+
+    private void CopyText(string text)
+    {
+        try
+        {
+            Clipboard.SetText(text);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Could not copy to the clipboard");
+            _notifications.Show("Copy", "Could not copy to the clipboard.", NotificationSeverity.Warning);
+        }
+    }
+
+    private void StartModuleScan(bool forceAll, ProcessInstanceKey? forceKey)
+    {
+        bool forced = forceAll || forceKey is not null;
+        if (!forced && _scanInFlight)
+        {
+            return;
+        }
+
+        _scanCts?.Cancel();
+        CancellationTokenSource scanCts = new();
+        _scanCts = scanCts;
+        int version = Interlocked.Increment(ref _scanVersion);
+        _scanInFlight = true;
+        _ = ScanModulesAsync(scanCts.Token, version, forceAll, forceKey);
+    }
+
+    private async Task ScanModulesAsync(CancellationToken token, int version, bool forceAll, ProcessInstanceKey? forceKey)
+    {
+        try
+        {
+            List<ProcessInfo> targets;
+            lock (_ledgerLock)
+            {
+                HashSet<ProcessInstanceKey> tracked = [];
+                foreach (InjectionLedgerEntry entry in _injectionState.Current.Entries)
+                {
+                    tracked.Add(new ProcessInstanceKey(entry.ProcessId, entry.CreationTime));
+                }
+
+                ProcessInstanceKey? selected = _selectedProcessId is int selectedId
+                    ? new ProcessInstanceKey(selectedId, _selectedProcessCreationTime)
+                    : null;
+                targets = ModuleInspectionPolicy.SelectScanTargets(
+                    _processes,
+                    selected,
+                    tracked,
+                    ShowDirect3DOnly,
+                    _elevationService.IsElevated,
+                    _lastScanTicks,
+                    Environment.TickCount64,
+                    ModuleInspectionPolicy.DefaultThrottleTicks,
+                    forceAll,
+                    forceKey);
+            }
+
+            List<(ProcessInstanceKey Key, ModuleScanResult Result)> results = [];
+            foreach (ProcessInfo process in targets)
+            {
+                token.ThrowIfCancellationRequested();
+                ModuleScanResult result = await _moduleScanner.ScanProcessAsync(process.Id, process.CreationTime, token);
+                results.Add((process.InstanceKey, result));
+            }
+
+            if (token.IsCancellationRequested || version != _scanVersion)
+            {
+                return;
+            }
+
+            ApplyScanResults(results);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "Module scan failed");
+        }
+        finally
+        {
+            if (version == _scanVersion)
+            {
+                _scanInFlight = false;
+            }
+        }
+    }
+
+    private void ApplyScanResults(List<(ProcessInstanceKey Key, ModuleScanResult Result)> results)
+    {
+        if (results.Count == 0)
+        {
+            return;
+        }
+
+        long now = Environment.TickCount64;
+        foreach ((ProcessInstanceKey key, ModuleScanResult result) in results)
+        {
+            _scans[key] = result;
+            _lastScanTicks[key] = now;
+        }
+
+        ApplyLedgerAndMarks();
+        if (ShowDirect3DOnly || ShowInjectedOnly || SortKey == ProcessListPolicy.KeyGraphicsApi)
+        {
+            PublishView(sameSnapshot: true);
+        }
+    }
+
+    private void ApplyLedgerAndMarks()
+    {
+        if (!_hasProcessSnapshot)
+        {
+            return;
+        }
+
+        bool changed;
+        lock (_ledgerLock)
+        {
+            changed = InjectionLedgerPolicy.PruneAndReconcile(
+                _injectionState.Current.Entries,
+                _processes,
+                _scans,
+                [.. DllPaths],
+                _marks);
+        }
+
+        if (changed)
+        {
+            _injectionState.Save();
+        }
+
+        HashSet<ProcessInstanceKey> seen = [];
+        foreach (ProcessInfo process in _processes)
+        {
+            seen.Add(process.InstanceKey);
+            if (_scans.TryGetValue(process.InstanceKey, out ModuleScanResult? scan))
+            {
+                if (scan.AccessState == ProcessAccessState.Accessible)
+                {
+                    process.GraphicsApi = scan.GraphicsApi;
+                }
+
+                if (scan.AccessState != ProcessAccessState.Unknown)
+                {
+                    process.AccessState = scan.AccessState;
+                }
+            }
+
+            if (_marks.TryGetValue(process.InstanceKey, out ProcessInjectionMark mark))
+            {
+                process.InjectionState = mark.State;
+                process.InjectedDlls = mark.DllPaths;
+            }
+            else
+            {
+                process.InjectionState = InjectionBadgeState.None;
+                process.InjectedDlls = [];
+            }
+        }
+
+        List<ProcessInstanceKey> stale = [];
+        foreach (ProcessInstanceKey key in _scans.Keys)
+        {
+            if (!seen.Contains(key))
+            {
+                stale.Add(key);
+            }
+        }
+
+        foreach (ProcessInstanceKey key in stale)
+        {
+            _scans.Remove(key);
+            _lastScanTicks.Remove(key);
+        }
     }
 
     private async Task PopulateIconsAsync(IReadOnlyList<ProcessInfo> processes, CancellationToken cancellationToken)

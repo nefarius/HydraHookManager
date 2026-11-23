@@ -36,9 +36,16 @@ internal sealed class FakeProcessService : IProcessService
 
     public int GetCalls { get; private set; }
 
+    public Exception? Failure { get; set; }
+
     public Task<IReadOnlyList<ProcessInfo>> GetProcessesAsync(CancellationToken cancellationToken = default)
     {
         GetCalls++;
+        if (Failure is not null)
+        {
+            throw Failure;
+        }
+
         return Task.FromResult<IReadOnlyList<ProcessInfo>>([.. Processes]);
     }
 
@@ -50,6 +57,16 @@ internal sealed class FakeProcessService : IProcessService
     public bool TryGetProcessCreationTime(int processId, out long creationTime)
     {
         return LiveCreationTimes.TryGetValue(processId, out creationTime);
+    }
+
+    public List<int> BroughtToFront { get; } = [];
+
+    public bool BringToFrontResult { get; set; } = true;
+
+    public bool TryBringWindowToFront(int processId)
+    {
+        BroughtToFront.Add(processId);
+        return BringToFrontResult;
     }
 }
 
@@ -69,6 +86,58 @@ internal sealed class FakeInjectorService : IInjectorService
     {
         Calls.Add(("eject", processId, is64Bit, [.. dllPaths]));
         return Task.FromResult(Result);
+    }
+}
+
+internal sealed class FakeModuleScanner : IModuleScannerService
+{
+    public List<(int ProcessId, long? CreationTime)> Calls { get; } = [];
+
+    public ModuleScanResult Result { get; set; } = new(ProcessAccessState.Accessible, [], null);
+
+    public Dictionary<int, ModuleScanResult> ResultsByProcess { get; } = [];
+
+    public Task? Hold { get; set; }
+
+    public Task<ModuleScanResult> ScanProcessAsync(int processId, long? expectedCreationTime, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((processId, expectedCreationTime));
+        if (Hold is not null)
+        {
+            return ScanAfterHoldAsync(processId, cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(ResultFor(processId));
+    }
+
+    private async Task<ModuleScanResult> ScanAfterHoldAsync(int processId, CancellationToken cancellationToken)
+    {
+        await Hold!.WaitAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return ResultFor(processId);
+    }
+
+    private ModuleScanResult ResultFor(int processId)
+    {
+        if (ResultsByProcess.TryGetValue(processId, out ModuleScanResult? result))
+        {
+            return result;
+        }
+
+        return Result;
+    }
+}
+
+internal sealed class FakeInjectionStateService : IInjectionStateService
+{
+    public InjectionStateData Current { get; } = new();
+
+    public int SaveCount { get; private set; }
+
+    public void Save()
+    {
+        SaveCount++;
     }
 }
 

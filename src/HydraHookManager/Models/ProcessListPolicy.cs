@@ -5,7 +5,11 @@ namespace HydraHookManager.Models;
 /// <summary>
 ///     Text and window constraints for the process list. An empty <see cref="Text"/> matches every name.
 /// </summary>
-public readonly record struct ProcessFilterOptions(string? Text, bool WindowedOnly);
+public readonly record struct ProcessFilterOptions(
+    string? Text,
+    bool WindowedOnly,
+    bool Direct3DOnly = false,
+    bool InjectedOnly = false);
 
 /// <summary>
 ///     One visible row. <see cref="IsContextOnly"/> marks a non-matching ancestor kept so a match stays connected to the root.
@@ -26,6 +30,7 @@ public static class ProcessListPolicy
     public const string KeyId = "Id";
     public const string KeyArchitecture = "Architecture";
     public const string KeyWindowTitle = "WindowTitle";
+    public const string KeyGraphicsApi = "GraphicsApi";
 
     public static List<ProcessInfo> Filter(IReadOnlyList<ProcessInfo> processes, string? filter)
     {
@@ -238,9 +243,8 @@ public static class ProcessListPolicy
                     continue;
                 }
 
-                if (filter.WindowedOnly
-                    && !process.HasWindow
-                    && !HasWindowedDescendant(process, childrenOf))
+                if (!MeetsChipCriteria(process, filter)
+                    && !HasCriteriaMatchingDescendant(process, childrenOf, filter))
                 {
                     continue;
                 }
@@ -324,13 +328,13 @@ public static class ProcessListPolicy
         ProcessFilterOptions filter,
         out bool asContext)
     {
-        if (!filter.WindowedOnly || node.HasWindow)
+        if (MeetsChipCriteria(node, filter))
         {
             asContext = false;
             return true;
         }
 
-        if (HasWindowedDescendant(node, childrenOf))
+        if (HasCriteriaMatchingDescendant(node, childrenOf, filter))
         {
             asContext = !MatchesText(node, filter.Text);
             return true;
@@ -340,19 +344,40 @@ public static class ProcessListPolicy
         return false;
     }
 
-    private static bool HasWindowedDescendant(
+    private static bool HasCriteriaMatchingDescendant(
         ProcessInfo node,
-        Dictionary<ProcessInfo, List<ProcessInfo>> childrenOf)
+        Dictionary<ProcessInfo, List<ProcessInfo>> childrenOf,
+        ProcessFilterOptions filter)
     {
         foreach (ProcessInfo child in childrenOf[node])
         {
-            if (child.HasWindow || HasWindowedDescendant(child, childrenOf))
+            if (MeetsChipCriteria(child, filter) || HasCriteriaMatchingDescendant(child, childrenOf, filter))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static bool MeetsChipCriteria(ProcessInfo process, ProcessFilterOptions filter)
+    {
+        if (filter.WindowedOnly && !process.HasWindow)
+        {
+            return false;
+        }
+
+        if (filter.Direct3DOnly && !process.HasDirect3D)
+        {
+            return false;
+        }
+
+        if (filter.InjectedOnly && !process.IsInjected)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static void AppendVisible(
@@ -456,12 +481,7 @@ public static class ProcessListPolicy
 
     private static bool IsDirectMatch(ProcessInfo process, ProcessFilterOptions filter)
     {
-        if (filter.WindowedOnly && !process.HasWindow)
-        {
-            return false;
-        }
-
-        return MatchesText(process, filter.Text);
+        return MeetsChipCriteria(process, filter) && MatchesText(process, filter.Text);
     }
 
     private static bool MatchesText(ProcessInfo process, string? filter)
@@ -525,6 +545,7 @@ public sealed class ProcessInfoComparer(string key, bool descending) : IComparer
             ProcessListPolicy.KeyId => x.Id.CompareTo(y.Id),
             ProcessListPolicy.KeyArchitecture => Compare(x.Architecture, y.Architecture),
             ProcessListPolicy.KeyWindowTitle => Compare(x.WindowTitle, y.WindowTitle),
+            ProcessListPolicy.KeyGraphicsApi => Compare(x.GraphicsApi, y.GraphicsApi),
             _ => Compare(x.Name, y.Name)
         };
 

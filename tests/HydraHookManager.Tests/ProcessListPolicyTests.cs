@@ -275,6 +275,53 @@ public class ProcessListPolicyTests
     }
 
     [Fact]
+    public void Direct3D_and_injected_filters_keep_matching_processes_and_their_ancestors()
+    {
+        ProcessInfo[] family = Family();
+        family[2].GraphicsApi = "D3D11";
+        family[3].InjectionState = InjectionBadgeState.Verified;
+
+        List<ProcessViewRow> graphics = View(family, direct3DOnly: true);
+        List<ProcessViewRow> injected = View(family, injectedOnly: true);
+        List<ProcessViewRow> both = View(family, direct3DOnly: true, injectedOnly: true);
+
+        Assert.Equal([1, 2, 3], graphics.Select(row => row.Process.Id));
+        Assert.True(graphics[0].IsContextOnly);
+        Assert.False(graphics[2].IsContextOnly);
+        Assert.Equal([1, 4], injected.Select(row => row.Process.Id));
+        Assert.Empty(both);
+    }
+
+    [Fact]
+    public void Graphics_column_sorts_after_the_selected_api()
+    {
+        ProcessInfo d3d12 = TestData.Process(1, "a");
+        ProcessInfo d3d11 = TestData.Process(2, "b");
+        d3d12.GraphicsApi = "D3D12";
+        d3d11.GraphicsApi = "D3D11";
+
+        List<ProcessViewRow> rows = View([d3d12, d3d11], tree: false, sortKey: ProcessListPolicy.KeyGraphicsApi);
+
+        Assert.Equal([2, 1], rows.Select(row => row.Process.Id));
+    }
+
+    [Fact]
+    public void Text_match_without_direct3d_is_kept_when_a_descendant_has_it()
+    {
+        ProcessInfo root = TestData.Process(1, "root", created: 1);
+        ProcessInfo launcher = TestData.Process(2, "launcher", parentId: 1, created: 2);
+        ProcessInfo game = TestData.Process(3, "game", parentId: 2, created: 3, window: "Play");
+        game.GraphicsApi = "D3D12";
+
+        List<ProcessViewRow> rows = View([root, launcher, game], text: "launcher", direct3DOnly: true);
+
+        Assert.Equal([1, 2, 3], rows.Select(row => row.Process.Id));
+        Assert.True(rows[0].IsContextOnly);
+        Assert.False(rows[1].IsContextOnly);
+        Assert.False(rows[2].IsContextOnly);
+    }
+
+    [Fact]
     public void FindRelaunchedInstance_returns_the_newest_other_instance()
     {
         ProcessInfo[] processes =
@@ -306,6 +353,8 @@ public class ProcessListPolicyTests
         IReadOnlyList<ProcessInfo> processes,
         string? text = null,
         bool windowedOnly = false,
+        bool direct3DOnly = false,
+        bool injectedOnly = false,
         bool tree = true,
         bool descending = false,
         string? sortKey = null,
@@ -313,7 +362,7 @@ public class ProcessListPolicyTests
     {
         return ProcessListPolicy.BuildView(
             processes,
-            new ProcessFilterOptions(text, windowedOnly),
+            new ProcessFilterOptions(text, windowedOnly, direct3DOnly, injectedOnly),
             sortKey ?? ProcessListPolicy.KeyName,
             descending,
             tree,
