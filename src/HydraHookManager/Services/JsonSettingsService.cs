@@ -65,7 +65,11 @@ public sealed class JsonSettingsService : ISettingsService
             }
 
             using FileStream stream = File.OpenRead(_path);
-            return JsonSerializer.Deserialize<AppSettings>(stream, Options) ?? new AppSettings();
+            AppSettings settings = JsonSerializer.Deserialize<AppSettings>(stream, Options) ?? new AppSettings();
+
+            // Valid JSON can still carry an explicit null collection.
+            settings.DllPaths ??= [];
+            return settings;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {

@@ -327,6 +327,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
+    public void OpenReleasePage(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            _logger?.LogWarning(ex, "Could not open the release page {Url}", url);
+            _notifications.Show("Update", $"Could not open the release page: {url}", NotificationSeverity.Warning);
+        }
+    }
+
     private bool CanRunInjector()
     {
         return !IsOperationRunning;
@@ -344,6 +357,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (DllPaths.Count == 0)
         {
             _notifications.Show("Add DLLs", $"Please add at least one DLL to {(eject ? "eject" : "inject")}.", NotificationSeverity.Warning);
+            return;
+        }
+
+        // Guard against PID reuse between the last refresh and this click.
+        // Unreadable creation times (e.g. protected processes) are allowed through so the injector can report the real error.
+        if (selected.CreationTime is long expectedCreationTime
+            && _processService.TryGetProcessCreationTime(selected.Id, out long liveCreationTime)
+            && liveCreationTime != expectedCreationTime)
+        {
+            _notifications.Show("Process changed", "The selected process is no longer running. The list was refreshed.", NotificationSeverity.Warning);
+            SelectedProcess = null;
+            await RefreshAsync();
             return;
         }
 

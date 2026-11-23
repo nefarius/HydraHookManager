@@ -29,6 +29,19 @@ public sealed class JsonSettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void Null_dll_list_is_normalized_to_empty()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+        File.WriteAllText(SettingsPath, "{\"DllPaths\":null,\"SortKey\":\"Pid\"}");
+
+        JsonSettingsService service = new(SettingsPath);
+
+        Assert.NotNull(service.Current.DllPaths);
+        Assert.Empty(service.Current.DllPaths);
+        Assert.Equal("Pid", service.Current.SortKey);
+    }
+
+    [Fact]
     public void Corrupt_file_yields_defaults()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);

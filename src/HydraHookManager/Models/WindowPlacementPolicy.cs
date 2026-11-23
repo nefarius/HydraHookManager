@@ -26,7 +26,8 @@ public static class WindowPlacementPolicy
     private const double TitleBarProbeX = 40;
     private const double TitleBarProbeY = 16;
     private const double MinOverlapWidth = 80;
-    private const double MinOverlapHeight = 40;
+    private const double TitleBarBandHeight = 32;
+    private const double MinTitleBarOverlapHeight = 16;
 
     public static void Write(AppSettings settings, WindowState state, Rect normalBounds)
     {
@@ -112,6 +113,8 @@ public static class WindowPlacementPolicy
             window.Left + Math.Min(TitleBarProbeX, window.Width / 2),
             window.Top + Math.Min(TitleBarProbeY, window.Height / 2));
 
+        Rect titleBar = new(window.Left, window.Top, window.Width, Math.Min(TitleBarBandHeight, window.Height));
+
         foreach (Rect monitor in monitorWorkAreas)
         {
             if (monitor.Contains(titleBarProbe))
@@ -122,10 +125,10 @@ public static class WindowPlacementPolicy
 
         foreach (Rect monitor in monitorWorkAreas)
         {
-            Rect overlap = Rect.Intersect(window, monitor);
+            Rect overlap = Rect.Intersect(titleBar, monitor);
             if (!overlap.IsEmpty &&
                 overlap.Width >= MinOverlapWidth &&
-                overlap.Height >= MinOverlapHeight)
+                overlap.Height >= MinTitleBarOverlapHeight)
             {
                 return true;
             }

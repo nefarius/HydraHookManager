@@ -261,6 +261,21 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Inject_is_refused_when_the_selected_pid_was_reused_by_another_process()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(p => p.Id == 20);
+        viewModel.AddDlls([@"C:\a.dll"]);
+        _processes.LiveCreationTimes[20] += 1;
+
+        await viewModel.InjectAsync();
+
+        Assert.Empty(_injector.Calls);
+        Assert.Equal("Process changed", _notifications.Messages[^1].Title);
+        Assert.Null(viewModel.SelectedProcess);
+    }
+
+    [Fact]
     public async Task Eject_calls_the_eject_operation_and_reports_it()
     {
         MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();

@@ -119,7 +119,7 @@ public partial class MainWindow : FluentWindow
             && result.ReleaseUrl is { } url
             && url.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase))
         {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+            _viewModel.OpenReleasePage(url);
         }
     }
 

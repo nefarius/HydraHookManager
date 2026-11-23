@@ -113,5 +113,7 @@ public class WindowPlacementPolicyTests
         Assert.True(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(-800, 100, 900, 600), [Primary]));
         Assert.False(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(-880, -570, 900, 600), [Primary]));
         Assert.False(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(0, 0, 900, 600), []));
+        // Body overlaps the monitor but the title bar is above it.
+        Assert.False(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(100, -500, 900, 600), [Primary]));
     }
 }
