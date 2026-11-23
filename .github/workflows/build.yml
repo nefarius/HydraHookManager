@@ -352,7 +352,9 @@ jobs:
             gh release edit "$RELEASE_TAG" --draft=false --prerelease
           else
             # Only the highest published stable version may become "latest"; reruns of older tags must not move it back.
-            highest="$(gh release list --limit 100 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
+            # A failed lookup must fail the job; an empty list is fine.
+            tags="$(gh release list --limit 100 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName')"
+            highest="$(printf '%s\n' "$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)"
             top="$(printf '%s\n%s\n' "$RELEASE_TAG" "$highest" | grep -E '^v' | sort -V | tail -n1)"
             if [ "$top" = "$RELEASE_TAG" ]; then
               gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
