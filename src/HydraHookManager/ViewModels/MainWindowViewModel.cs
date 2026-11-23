@@ -753,7 +753,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void ArmRelaunchTracking()
     {
-        if (string.IsNullOrWhiteSpace(_selectedExePath))
+        // A null baseline would match any already-running copy of the same executable.
+        if (string.IsNullOrWhiteSpace(_selectedExePath) || _selectedProcessCreationTime is null)
         {
             return;
         }

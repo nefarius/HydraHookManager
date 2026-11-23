@@ -261,6 +261,20 @@ public class ProcessListPolicyTests
     }
 
     [Fact]
+    public void Windowed_text_filter_skips_a_match_with_no_windowed_descendant()
+    {
+        List<ProcessViewRow> rows = View(
+        [
+            TestData.Process(1, "launcher", created: 1),
+            TestData.Process(2, "game", created: 2, window: "Play")
+        ],
+        text: "launcher",
+        windowedOnly: true);
+
+        Assert.Empty(rows);
+    }
+
+    [Fact]
     public void FindRelaunchedInstance_returns_the_newest_other_instance()
     {
         ProcessInfo[] processes =

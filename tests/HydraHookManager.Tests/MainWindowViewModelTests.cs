@@ -695,6 +695,24 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Refresh_does_not_follow_an_existing_sibling_when_creation_time_is_unknown()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(10, "game", window: "Game", omitCreationTime: true, exePath: @"C:\Games\game.exe"),
+            TestData.Process(20, "game", window: "Game", created: 2000, exePath: @"C:\Games\game.exe")
+        ];
+        _processes.LiveCreationTimes[20] = 2000;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+
+        await viewModel.RefreshAsync();
+
+        Assert.Null(viewModel.SelectedProcess);
+    }
+
+    [Fact]
     public async Task Refresh_does_not_reuse_a_process_whose_creation_time_is_unknown()
     {
         _processes.Processes = [TestData.Process(10, "game", omitCreationTime: true, window: "Game")];

@@ -238,6 +238,13 @@ public static class ProcessListPolicy
                     continue;
                 }
 
+                if (filter.WindowedOnly
+                    && !process.HasWindow
+                    && !HasWindowedDescendant(process, childrenOf))
+                {
+                    continue;
+                }
+
                 IncludeWithAncestors(process, parentOf, included, contextOnly, filter);
                 IncludeDescendants(process, childrenOf, included, contextOnly, filter);
             }
