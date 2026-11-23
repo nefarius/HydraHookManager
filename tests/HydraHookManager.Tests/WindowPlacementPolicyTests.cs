@@ -133,4 +133,20 @@ public class WindowPlacementPolicyTests
         Assert.Equal(200, WindowPlacementPolicy.ClampDllPaneHeight(400, 200));
         Assert.Equal(80, WindowPlacementPolicy.ClampDllPaneHeight(180, 80));
     }
+
+    [Fact]
+    public void ResolveDllPaneSize_restores_the_requested_height_when_space_returns()
+    {
+        (double requested, double display) = WindowPlacementPolicy.ResolveDllPaneSize(200, 200, 200, 160);
+        Assert.Equal(200, requested);
+        Assert.Equal(160, display);
+
+        (requested, display) = WindowPlacementPolicy.ResolveDllPaneSize(requested, display, display, 240);
+        Assert.Equal(200, requested);
+        Assert.Equal(200, display);
+
+        (requested, display) = WindowPlacementPolicy.ResolveDllPaneSize(requested, 250, display, 400);
+        Assert.Equal(250, requested);
+        Assert.Equal(250, display);
+    }
 }

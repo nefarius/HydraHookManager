@@ -30,6 +30,8 @@ public partial class MainWindow : FluentWindow
     private readonly IContentDialogService _contentDialogService;
     private readonly DispatcherTimer _autoRefreshTimer;
     private WindowState _lastWindowState = WindowState.Normal;
+    private double _requestedDllPaneHeight = WindowPlacementPolicy.DefaultDllPaneHeight;
+    private double _appliedDllPaneHeight = WindowPlacementPolicy.DefaultDllPaneHeight;
 
     public MainWindow(
         MainWindowViewModel viewModel,
@@ -81,13 +83,15 @@ public partial class MainWindow : FluentWindow
             ? new Rect(Left, Top, Width, Height)
             : RestoreBounds;
         WindowPlacementPolicy.Write(_viewModel.Settings, WindowState, bounds);
-        _viewModel.Settings.DllPaneHeight = WindowPlacementPolicy.ClampDllPaneHeight(DllPaneRow.ActualHeight);
+        _viewModel.Settings.DllPaneHeight = WindowPlacementPolicy.ClampDllPaneHeight(_requestedDllPaneHeight);
         _viewModel.SaveSettings();
     }
 
     private void ApplySavedPlacement()
     {
-        DllPaneRow.Height = new GridLength(WindowPlacementPolicy.ClampDllPaneHeight(_viewModel.Settings.DllPaneHeight));
+        _requestedDllPaneHeight = WindowPlacementPolicy.ClampDllPaneHeight(_viewModel.Settings.DllPaneHeight);
+        _appliedDllPaneHeight = _requestedDllPaneHeight;
+        DllPaneRow.Height = new GridLength(_requestedDllPaneHeight);
         UpdateDllPaneLimit();
         if (!WindowPlacementPolicy.TryRead(_viewModel.Settings, out WindowPlacementSnapshot saved))
         {
@@ -137,16 +141,20 @@ public partial class MainWindow : FluentWindow
 
         double chrome = HeaderRow.ActualHeight + SplitterRow.ActualHeight + ActionRow.ActualHeight + SnackbarRow.ActualHeight;
         double available = RootLayout.ActualHeight - chrome - WindowPlacementPolicy.ProcessListMinHeight;
-        double current = DllPaneRow.Height.IsAbsolute
-            ? DllPaneRow.Height.Value
-            : WindowPlacementPolicy.DefaultDllPaneHeight;
-        double capped = WindowPlacementPolicy.ClampDllPaneHeight(current, available);
-        double floor = Math.Min(WindowPlacementPolicy.MinDllPaneHeight, capped);
+        double shown = DllPaneRow.Height.IsAbsolute ? DllPaneRow.Height.Value : _requestedDllPaneHeight;
+        (double requested, double display) = WindowPlacementPolicy.ResolveDllPaneSize(
+            _requestedDllPaneHeight,
+            shown,
+            _appliedDllPaneHeight,
+            available);
+        _requestedDllPaneHeight = requested;
+        _appliedDllPaneHeight = display;
+        double floor = Math.Min(WindowPlacementPolicy.MinDllPaneHeight, display);
         DllPaneRow.MinHeight = floor;
         DllPaneRow.MaxHeight = Math.Max(floor, Math.Min(WindowPlacementPolicy.MaxDllPaneHeight, Math.Max(0, available)));
-        if (current > DllPaneRow.MaxHeight)
+        if (Math.Abs(shown - display) > 0.5)
         {
-            DllPaneRow.Height = new GridLength(capped);
+            DllPaneRow.Height = new GridLength(display);
         }
     }
 

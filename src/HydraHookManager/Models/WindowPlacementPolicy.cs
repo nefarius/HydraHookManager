@@ -51,6 +51,24 @@ public static class WindowPlacementPolicy
         return Math.Clamp(value, floor, upper);
     }
 
+    /// <summary>
+    ///     A user drag updates the requested height. A temporary cap only changes what is shown.
+    /// </summary>
+    public static (double Requested, double Display) ResolveDllPaneSize(
+        double requested,
+        double shown,
+        double lastApplied,
+        double available)
+    {
+        double nextRequested = requested;
+        if (double.IsFinite(shown) && Math.Abs(shown - lastApplied) > 0.5)
+        {
+            nextRequested = ClampDllPaneHeight(shown);
+        }
+
+        return (nextRequested, ClampDllPaneHeight(nextRequested, available));
+    }
+
     private const double TitleBarProbeX = 40;
     private const double TitleBarProbeY = 16;
     private const double MinOverlapWidth = 80;
