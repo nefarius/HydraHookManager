@@ -13,6 +13,7 @@ public sealed partial class LoadedModulesViewModel : ObservableObject
     private readonly ProcessInfo _process;
     private readonly string? _windowsDirectory;
     private List<InspectorModuleRow> _all = [];
+    private int _refreshVersion;
 
     public LoadedModulesViewModel(
         ProcessInfo process,
@@ -49,15 +50,24 @@ public sealed partial class LoadedModulesViewModel : ObservableObject
     [RelayCommand]
     public async Task RefreshAsync()
     {
+        int version = Interlocked.Increment(ref _refreshVersion);
         ModuleScanResult result = await _scanner.ScanProcessAsync(_process.Id, _process.CreationTime);
-        ShowAccessMessage = result.AccessState is ProcessAccessState.RequiresAdmin or ProcessAccessState.Protected;
+        if (version != _refreshVersion)
+        {
+            return;
+        }
+
+        ShowAccessMessage = result.AccessState != ProcessAccessState.Accessible;
         AccessMessage = result.AccessState switch
         {
             ProcessAccessState.RequiresAdmin => "Modules could not be read. Restart the manager as administrator and try again.",
             ProcessAccessState.Protected => "This process is protected. Its modules cannot be read.",
+            ProcessAccessState.Unknown => "Modules could not be read. The process may have exited, or the module list changed during the scan.",
             _ => null
         };
-        _all = ModuleInspectionPolicy.OrderModulesForInspector(result.Modules, _process.InjectedDlls, _windowsDirectory);
+        _all = result.AccessState == ProcessAccessState.Accessible
+            ? ModuleInspectionPolicy.OrderModulesForInspector(result.Modules, _process.InjectedDlls, _windowsDirectory)
+            : [];
         ApplyFilter();
     }
 

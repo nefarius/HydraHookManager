@@ -43,6 +43,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool _restoringSelection;
     private CancellationTokenSource? _scanCts;
     private int _scanVersion;
+    private bool _scanInFlight;
+    private bool _hasProcessSnapshot;
 
     [ObservableProperty]
     private ProcessInfo? _selectedProcess;
@@ -407,6 +409,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public Task<bool> EjectDllAsync(ProcessInfo? process, string? dllPath)
     {
+        if (IsOperationRunning)
+        {
+            _notifications.Show("Operation running", "Wait for the current injector operation to finish.", NotificationSeverity.Warning);
+            return Task.FromResult(false);
+        }
+
         if (process is null || string.IsNullOrWhiteSpace(dllPath))
         {
             _notifications.Show("Select process", "Please select a process from the list.", NotificationSeverity.Warning);
@@ -605,6 +613,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
             Reconcile(processes);
             UpdateTrackedSelection();
+            _hasProcessSnapshot = true;
             ApplyLedgerAndMarks();
             PublishView(sameSnapshot: false);
             StartModuleScan(forceAll: userInitiated, forceKey: null);
@@ -992,6 +1001,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         lock (_ledgerLock)
         {
+            _scans.Remove(selected.InstanceKey);
+            _lastScanTicks.Remove(selected.InstanceKey);
             bool changed = eject
                 ? InjectionLedgerPolicy.RecordEject(_injectionState.Current.Entries, selected.Id, selected.CreationTime, dlls)
                 : InjectionLedgerPolicy.RecordInject(_injectionState.Current.Entries, selected.Id, selected.CreationTime, selected.ExePath, dlls);
@@ -1017,10 +1028,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void StartModuleScan(bool forceAll, ProcessInstanceKey? forceKey)
     {
+        bool forced = forceAll || forceKey is not null;
+        if (!forced && _scanInFlight)
+        {
+            return;
+        }
+
         _scanCts?.Cancel();
         CancellationTokenSource scanCts = new();
         _scanCts = scanCts;
         int version = Interlocked.Increment(ref _scanVersion);
+        _scanInFlight = true;
         _ = ScanModulesAsync(scanCts.Token, version, forceAll, forceKey);
     }
 
@@ -1075,6 +1093,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             _logger?.LogDebug(ex, "Module scan failed");
         }
+        finally
+        {
+            if (version == _scanVersion)
+            {
+                _scanInFlight = false;
+            }
+        }
     }
 
     private void ApplyScanResults(List<(ProcessInstanceKey Key, ModuleScanResult Result)> results)
@@ -1100,6 +1125,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void ApplyLedgerAndMarks()
     {
+        if (!_hasProcessSnapshot)
+        {
+            return;
+        }
+
         bool changed;
         lock (_ledgerLock)
         {

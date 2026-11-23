@@ -460,6 +460,8 @@ public class MainWindowViewModelTests
         Assert.True(viewModel.IsOperationRunning);
         Assert.False(viewModel.InjectCommand.CanExecute(null));
         Assert.False(viewModel.EjectCommand.CanExecute(null));
+        Assert.False(await viewModel.EjectDllAsync(viewModel.SelectedProcess, @"C:\a.dll"));
+        Assert.Contains(_notifications.Messages, message => message.Title == "Operation running");
 
         gate.SetResult(new InjectResult(true, "ok", ""));
         await running;
@@ -765,6 +767,65 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Background_refresh_does_not_cancel_a_module_scan_that_is_still_running()
+    {
+        _processes.Processes = [TestData.Process(1, "game", window: "Play", created: 1)];
+        TaskCompletionSource hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _modules.Hold = hold.Task;
+        MainWindowViewModel viewModel = CreateViewModel();
+
+        await viewModel.RefreshIfIdleAsync();
+        await viewModel.RefreshIfIdleAsync();
+
+        Assert.Equal([1], _modules.Calls.Select(call => call.ProcessId));
+        hold.SetResult();
+    }
+
+    [Fact]
+    public async Task Adding_a_dll_before_the_first_snapshot_keeps_remembered_injections()
+    {
+        _ledger.Current.Entries.Add(new InjectionLedgerEntry
+        {
+            ProcessId = 10,
+            CreationTime = 1000,
+            ExePath = @"C:\game.exe",
+            DllPaths = [@"C:\old.dll"]
+        });
+        MainWindowViewModel viewModel = CreateViewModel();
+
+        viewModel.AddDlls([@"C:\a.dll"]);
+
+        Assert.Equal([@"C:\old.dll"], _ledger.Current.Entries.Single().DllPaths);
+        Assert.Equal(0, _ledger.SaveCount);
+
+        _processes.Processes = [];
+        await viewModel.RefreshAsync();
+
+        Assert.Empty(_ledger.Current.Entries);
+        Assert.Equal(1, _ledger.SaveCount);
+    }
+
+    [Fact]
+    public async Task Refresh_before_the_post_inject_scan_finishes_keeps_the_new_ledger_entry()
+    {
+        _processes.Processes = [TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\game.exe")];
+        _processes.LiveCreationTimes[10] = 1000;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        TaskCompletionSource hold = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        _modules.Hold = hold.Task;
+
+        await viewModel.InjectAsync();
+        await viewModel.RefreshIfIdleAsync();
+
+        Assert.Equal([@"C:\a.dll"], _ledger.Current.Entries.Single().DllPaths);
+        Assert.Equal(InjectionBadgeState.TrackedUnverified, viewModel.VisibleProcesses.Single().InjectionState);
+        hold.SetResult();
+    }
+
+    [Fact]
     public async Task Selecting_a_process_scans_that_process()
     {
         _processes.Processes =
@@ -975,6 +1036,71 @@ public class MainWindowViewModelTests
         public Task<InjectResult> EjectAsync(int processId, bool is64Bit, IReadOnlyList<string> dllPaths, CancellationToken cancellationToken = default)
         {
             return result;
+        }
+    }
+}
+
+public class LoadedModulesViewModelTests
+{
+    [Fact]
+    public async Task Unknown_scan_explains_the_failure_and_an_empty_list_does_not()
+    {
+        ProcessInfo process = TestData.Process(10, "game", created: 1000);
+        FakeModuleScanner scanner = new()
+        {
+            Result = new ModuleScanResult(ProcessAccessState.Unknown, [], null)
+        };
+        LoadedModulesViewModel viewModel = new(process, scanner, _ => Task.FromResult(true));
+
+        await viewModel.RefreshAsync();
+
+        Assert.True(viewModel.ShowAccessMessage);
+        Assert.Contains("could not be read", viewModel.AccessMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(viewModel.Rows);
+
+        scanner.Result = new ModuleScanResult(ProcessAccessState.Accessible, [], null);
+        await viewModel.RefreshAsync();
+
+        Assert.False(viewModel.ShowAccessMessage);
+        Assert.Empty(viewModel.Rows);
+    }
+
+    [Fact]
+    public async Task An_older_refresh_does_not_replace_a_newer_module_list()
+    {
+        ProcessInfo process = TestData.Process(10, "game", created: 1000);
+        TaskCompletionSource<ModuleScanResult> older = new();
+        SequencedScanner scanner = new();
+        scanner.Enqueue(older.Task);
+        scanner.Enqueue(Task.FromResult(new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("new.dll", @"C:\new.dll", 0, 1)],
+            null)));
+        LoadedModulesViewModel viewModel = new(process, scanner, _ => Task.FromResult(true));
+
+        Task first = viewModel.RefreshAsync();
+        await viewModel.RefreshAsync();
+        older.SetResult(new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("old.dll", @"C:\old.dll", 0, 1)],
+            null));
+        await first;
+
+        Assert.Equal(["new.dll"], viewModel.Rows.Select(row => row.Name));
+    }
+
+    private sealed class SequencedScanner : IModuleScannerService
+    {
+        private readonly Queue<Task<ModuleScanResult>> _results = new();
+
+        public void Enqueue(Task<ModuleScanResult> result)
+        {
+            _results.Enqueue(result);
+        }
+
+        public Task<ModuleScanResult> ScanProcessAsync(int processId, long? expectedCreationTime, CancellationToken cancellationToken = default)
+        {
+            return _results.Dequeue();
         }
     }
 }

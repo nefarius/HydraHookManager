@@ -140,20 +140,11 @@ public static class InjectionLedgerPolicy
         Dictionary<ProcessInstanceKey, ProcessInjectionMark> marks)
     {
         marks.Clear();
-        HashSet<(int Id, long Created)> liveKeys = [];
-        foreach (ProcessInfo process in liveProcesses)
-        {
-            if (process.CreationTime is long created)
-            {
-                liveKeys.Add((process.Id, created));
-            }
-        }
-
         bool changed = false;
         for (int index = entries.Count - 1; index >= 0; index--)
         {
             InjectionLedgerEntry entry = entries[index];
-            if (!liveKeys.Contains((entry.ProcessId, entry.CreationTime)))
+            if (ShouldDrop(entry, liveProcesses))
             {
                 entries.RemoveAt(index);
                 changed = true;
@@ -190,7 +181,67 @@ public static class InjectionLedgerPolicy
             }
         }
 
+        foreach (ProcessInfo process in liveProcesses)
+        {
+            if (process.CreationTime is not null || marks.ContainsKey(process.InstanceKey))
+            {
+                continue;
+            }
+
+            InjectionLedgerEntry? entry = FindByProcessId(entries, process.Id);
+            if (entry is null)
+            {
+                continue;
+            }
+
+            marks[process.InstanceKey] = new ProcessInjectionMark(InjectionBadgeState.TrackedUnverified, [.. entry.DllPaths]);
+        }
+
         return changed;
+    }
+
+    private static bool ShouldDrop(InjectionLedgerEntry entry, IReadOnlyList<ProcessInfo> liveProcesses)
+    {
+        bool sawPid = false;
+        bool sawSameCreation = false;
+        bool sawUnknownCreation = false;
+        foreach (ProcessInfo process in liveProcesses)
+        {
+            if (process.Id != entry.ProcessId)
+            {
+                continue;
+            }
+
+            sawPid = true;
+            if (process.CreationTime is not long created)
+            {
+                sawUnknownCreation = true;
+            }
+            else if (created == entry.CreationTime)
+            {
+                sawSameCreation = true;
+            }
+        }
+
+        if (!sawPid)
+        {
+            return true;
+        }
+
+        return !sawSameCreation && !sawUnknownCreation;
+    }
+
+    private static InjectionLedgerEntry? FindByProcessId(List<InjectionLedgerEntry> entries, int processId)
+    {
+        foreach (InjectionLedgerEntry entry in entries)
+        {
+            if (entry.ProcessId == processId)
+            {
+                return entry;
+            }
+        }
+
+        return null;
     }
 
     private static bool Upsert(

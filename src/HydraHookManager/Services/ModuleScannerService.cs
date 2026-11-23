@@ -113,10 +113,13 @@ public sealed class ModuleScannerService : IModuleScannerService
             for (int index = 0; index < count; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                string path = QueryModulePath(process, modules[index]);
+                if (!TryQueryModulePath(process, modules[index], out string path))
+                {
+                    return Empty(ProcessAccessState.Unknown);
+                }
+
                 uint size = QueryModuleSize(process, modules[index]);
-                string name = string.IsNullOrEmpty(path) ? "" : Path.GetFileName(path);
-                loaded.Add(new LoadedModuleInfo(name, path, (nuint)modules[index].Value, size));
+                loaded.Add(new LoadedModuleInfo(Path.GetFileName(path), path, (nuint)modules[index].Value, size));
             }
 
             return new ModuleScanResult(ProcessAccessState.Accessible, loaded, ModuleInspectionPolicy.DetectGraphicsApi(loaded));
@@ -125,17 +128,34 @@ public sealed class ModuleScannerService : IModuleScannerService
         return Empty(ProcessAccessState.Unknown);
     }
 
-    private static unsafe string QueryModulePath(HANDLE process, HMODULE module)
+    private static unsafe bool TryQueryModulePath(HANDLE process, HMODULE module, out string path)
     {
-        char* buffer = stackalloc char[PathBufferChars];
-        uint copied = PInvoke.GetModuleFileNameEx(process, module, buffer, PathBufferChars);
-        if (copied == 0)
+        path = "";
+        uint capacity = PathBufferChars;
+        while (capacity <= 32 * 1024)
         {
-            return "";
+            char[] buffer = new char[capacity];
+            uint copied;
+            fixed (char* pointer = buffer)
+            {
+                copied = PInvoke.GetModuleFileNameEx(process, module, pointer, capacity);
+            }
+
+            if (copied == 0)
+            {
+                return false;
+            }
+
+            if (copied < capacity - 1)
+            {
+                path = ModuleInspectionPolicy.NormalizeModulePath(new string(buffer, 0, (int)copied));
+                return path.Length > 0;
+            }
+
+            capacity *= 2;
         }
 
-        int length = (int)Math.Min(copied, PathBufferChars - 1);
-        return ModuleInspectionPolicy.NormalizeModulePath(new string(buffer, 0, length));
+        return false;
     }
 
     private static unsafe uint QueryModuleSize(HANDLE process, HMODULE module)

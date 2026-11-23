@@ -17,15 +17,17 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <TextBlock Grid.Row="0" Text="{Binding Header}" FontWeight="SemiBold" Margin="0,0,0,8" />
-        <TextBlock Grid.Row="1"
+        <ui:TitleBar Grid.Row="0" Title="Loaded modules" />
+        <TextBlock Grid.Row="1" Text="{Binding Header}" FontWeight="SemiBold" Margin="0,8,0,8" />
+        <TextBlock Grid.Row="2"
                    Text="{Binding AccessMessage}"
                    TextWrapping="Wrap"
                    Margin="0,0,0,8"
                    Visibility="{Binding ShowAccessMessage, Converter={StaticResource BooleanToVisibility}}" />
-        <DockPanel Grid.Row="2" Margin="0,0,0,8" LastChildFill="True">
+        <DockPanel Grid.Row="3" Margin="0,0,0,8" LastChildFill="True">
             <ui:Button DockPanel.Dock="Right"
                        Content="Refresh"
                        Margin="8,0,0,0"
@@ -34,7 +36,7 @@
             <ui:TextBox PlaceholderText="Filter modules..."
                         Text="{Binding Filter, UpdateSourceTrigger=PropertyChanged}" />
         </DockPanel>
-        <ui:ListView Grid.Row="3"
+        <ui:ListView Grid.Row="4"
                      ItemsSource="{Binding Rows}"
                      BorderThickness="0"
                      VirtualizingPanel.IsVirtualizing="True"

@@ -88,6 +88,22 @@ public class InjectionLedgerTests
     }
 
     [Fact]
+    public void PruneAndReconcile_keeps_an_entry_when_the_live_creation_time_is_unknown()
+    {
+        List<InjectionLedgerEntry> entries = [];
+        InjectionLedgerPolicy.RecordInject(entries, 10, 1000, @"C:\game.exe", [@"C:\a.dll"]);
+        ProcessInfo live = TestData.Process(10, "game", omitCreationTime: true, exePath: @"C:\game.exe");
+        Dictionary<ProcessInstanceKey, ProcessInjectionMark> marks = [];
+
+        bool changed = InjectionLedgerPolicy.PruneAndReconcile(entries, [live], new Dictionary<ProcessInstanceKey, ModuleScanResult>(), [], marks);
+
+        Assert.False(changed);
+        Assert.Single(entries);
+        Assert.Equal(InjectionBadgeState.TrackedUnverified, marks[live.InstanceKey].State);
+        Assert.Equal([@"C:\a.dll"], marks[live.InstanceKey].DllPaths);
+    }
+
+    [Fact]
     public void PruneAndReconcile_adds_a_configured_dll_that_is_already_loaded()
     {
         ProcessInfo game = TestData.Process(10, "game", created: 1000, exePath: @"C:\game.exe");
@@ -130,6 +146,11 @@ public class InjectionLedgerTests
 
             File.WriteAllText(path, "{ not json");
             Assert.Empty(new JsonInjectionStateService(path).Current.Entries);
+
+            File.WriteAllText(path, """{"Entries":[null,{"ProcessId":4,"CreationTime":8,"ExePath":"C:\\game.exe","DllPaths":null}]}""");
+            InjectionLedgerEntry recovered = new JsonInjectionStateService(path).Current.Entries.Single();
+            Assert.Equal(4, recovered.ProcessId);
+            Assert.Empty(recovered.DllPaths);
         }
         finally
         {

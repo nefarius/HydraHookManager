@@ -90,15 +90,35 @@ internal sealed class FakeModuleScanner : IModuleScannerService
 
     public Dictionary<int, ModuleScanResult> ResultsByProcess { get; } = [];
 
+    public Task? Hold { get; set; }
+
     public Task<ModuleScanResult> ScanProcessAsync(int processId, long? expectedCreationTime, CancellationToken cancellationToken = default)
     {
         Calls.Add((processId, expectedCreationTime));
-        if (ResultsByProcess.TryGetValue(processId, out ModuleScanResult? result))
+        if (Hold is not null)
         {
-            return Task.FromResult(result);
+            return ScanAfterHoldAsync(processId, cancellationToken);
         }
 
-        return Task.FromResult(Result);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(ResultFor(processId));
+    }
+
+    private async Task<ModuleScanResult> ScanAfterHoldAsync(int processId, CancellationToken cancellationToken)
+    {
+        await Hold!.WaitAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        return ResultFor(processId);
+    }
+
+    private ModuleScanResult ResultFor(int processId)
+    {
+        if (ResultsByProcess.TryGetValue(processId, out ModuleScanResult? result))
+        {
+            return result;
+        }
+
+        return Result;
     }
 }
 

@@ -66,7 +66,7 @@ public sealed class JsonInjectionStateService : IInjectionStateService
 
             using FileStream stream = File.OpenRead(_path);
             InjectionStateData state = JsonSerializer.Deserialize<InjectionStateData>(stream, Options) ?? new InjectionStateData();
-            state.Entries ??= [];
+            state.Entries = ValidEntries(state.Entries);
             return state;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -74,5 +74,27 @@ public sealed class JsonInjectionStateService : IInjectionStateService
             _logger?.LogWarning(ex, "Could not read injection state from {Path}; using an empty ledger", _path);
             return new InjectionStateData();
         }
+    }
+
+    private static List<InjectionLedgerEntry> ValidEntries(List<InjectionLedgerEntry>? entries)
+    {
+        List<InjectionLedgerEntry> valid = [];
+        if (entries is null)
+        {
+            return valid;
+        }
+
+        foreach (InjectionLedgerEntry? entry in entries)
+        {
+            if (entry is null)
+            {
+                continue;
+            }
+
+            entry.DllPaths ??= [];
+            valid.Add(entry);
+        }
+
+        return valid;
     }
 }
