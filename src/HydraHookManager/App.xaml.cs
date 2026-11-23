@@ -55,6 +55,7 @@ public partial class App : Application
         services.AddSingleton<IProcessService, ProcessService>();
         services.AddSingleton<IModuleScannerService, ModuleScannerService>();
         services.AddSingleton<IInjectionStateService, JsonInjectionStateService>();
+        services.AddSingleton<IDllInspectorService, PeDllInspectorService>();
         services.AddSingleton<ISettingsService, JsonSettingsService>();
         services.AddSingleton<IElevationService, ElevationService>();
         services.AddSingleton<IUpdateCheckService, GitHubUpdateCheckService>();

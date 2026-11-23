@@ -14,6 +14,7 @@ public class MainWindowViewModelTests
     private readonly FakeNotificationService _notifications = new();
     private readonly FakeModuleScanner _modules = new();
     private readonly FakeInjectionStateService _ledger = new();
+    private readonly FakeDllInspector _dlls = new();
 
     private MainWindowViewModel CreateViewModel()
     {
@@ -25,7 +26,8 @@ public class MainWindowViewModelTests
             _updates,
             _notifications,
             _modules,
-            _ledger);
+            _ledger,
+            _dlls);
     }
 
     private async Task<MainWindowViewModel> CreateLoadedViewModelAsync()
@@ -57,7 +59,7 @@ public class MainWindowViewModelTests
 
         Assert.Equal("Id", viewModel.SortKey);
         Assert.True(viewModel.SortDescending);
-        Assert.Equal([@"C:\a.dll", @"C:\b.dll"], viewModel.DllPaths);
+        Assert.Equal([@"C:\a.dll", @"C:\b.dll"], viewModel.DllItems.Select(item => item.Path));
     }
 
     [Fact]
@@ -74,7 +76,7 @@ public class MainWindowViewModelTests
     {
         MainWindowViewModel viewModel = CreateViewModel();
         ThrowingProcessService failing = new();
-        MainWindowViewModel failingViewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger);
+        MainWindowViewModel failingViewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls);
 
         await failingViewModel.RefreshAsync();
 
@@ -252,6 +254,7 @@ public class MainWindowViewModelTests
         Assert.Equal(2, first);
         Assert.Equal(0, second);
         Assert.Equal([@"C:\a.dll", @"C:\b.dll"], _settings.Current.DllPaths);
+        Assert.Equal([true, true], _settings.Current.Dlls!.Select(entry => entry.IsChecked));
         Assert.Equal(1, _settings.SaveCount);
     }
 
@@ -260,13 +263,24 @@ public class MainWindowViewModelTests
     {
         MainWindowViewModel viewModel = CreateViewModel();
         viewModel.AddDlls([@"C:\a.dll", @"C:\b.dll"]);
-        viewModel.SelectedDll = @"C:\a.dll";
+        viewModel.SelectedDll = viewModel.DllItems[0];
 
         viewModel.RemoveSelectedDll();
 
-        Assert.Equal([@"C:\b.dll"], viewModel.DllPaths);
+        Assert.Equal([@"C:\b.dll"], viewModel.DllItems.Select(item => item.Path));
         Assert.Null(viewModel.SelectedDll);
         Assert.Equal([@"C:\b.dll"], _settings.Current.DllPaths);
+    }
+
+    [Fact]
+    public void Unchecking_a_dll_is_persisted()
+    {
+        MainWindowViewModel viewModel = CreateViewModel();
+        viewModel.AddDlls([@"C:\a.dll"]);
+
+        viewModel.DllItems[0].IsChecked = false;
+
+        Assert.False(_settings.Current.Dlls![0].IsChecked);
     }
 
     [Fact]
@@ -298,6 +312,7 @@ public class MainWindowViewModelTests
     {
         MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
         viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(p => p.Id == 20);
+        _dlls.DefaultArchitecture = DllArchitecture.X86;
         viewModel.AddDlls([@"C:\a.dll", @"C:\b.dll"]);
 
         await viewModel.InjectAsync();
@@ -309,6 +324,68 @@ public class MainWindowViewModelTests
         Assert.Equal([@"C:\a.dll", @"C:\b.dll"], dlls);
         Assert.Equal(("Injection successful", NotificationSeverity.Success), (_notifications.Messages[0].Title, _notifications.Messages[0].Severity));
         Assert.False(viewModel.IsOperationRunning);
+    }
+
+    [Fact]
+    public async Task Inject_keeps_both_architectures_checked_and_sends_only_the_match()
+    {
+        _dlls.Results[@"C:\x86.dll"] = new DllInspectionResult(DllFileStatus.Ok, DllArchitecture.X86);
+        _dlls.Results[@"C:\x64.dll"] = new DllInspectionResult(DllFileStatus.Ok, DllArchitecture.X64);
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 20);
+        viewModel.AddDlls([@"C:\x86.dll", @"C:\x64.dll"]);
+
+        await viewModel.InjectAsync();
+
+        Assert.Equal([@"C:\x86.dll"], Assert.Single(_injector.Calls).Dlls);
+        Assert.True(viewModel.DllItems.All(item => item.IsChecked));
+        Assert.Contains("Skipped 1", _notifications.Messages[0].Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Unchecked_and_missing_dlls_are_not_injected()
+    {
+        _dlls.Results[@"C:\missing.dll"] = new DllInspectionResult(DllFileStatus.Missing, DllArchitecture.Unknown);
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses[0];
+        viewModel.AddDlls([@"C:\a.dll", @"C:\missing.dll"]);
+        viewModel.DllItems[0].IsChecked = false;
+
+        await viewModel.InjectAsync();
+
+        Assert.Empty(_injector.Calls);
+        Assert.Equal("DLLs", _notifications.Messages[^1].Title);
+    }
+
+    [Fact]
+    public async Task Eject_still_sends_a_checked_dll_that_is_missing_on_disk()
+    {
+        _dlls.Results[@"C:\a.dll"] = new DllInspectionResult(DllFileStatus.Missing, DllArchitecture.Unknown);
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses[0];
+        viewModel.AddDlls([@"C:\a.dll"]);
+
+        await viewModel.EjectAsync();
+
+        Assert.Equal([@"C:\a.dll"], Assert.Single(_injector.Calls).Dlls);
+    }
+
+    [Fact]
+    public async Task A_loaded_module_marks_the_matching_dll_row()
+    {
+        _processes.Processes = [TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\game.exe")];
+        _modules.Result = new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("a.dll", @"C:\a.dll", 0x1000, 10)],
+            null);
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single();
+        viewModel.AddDlls([@"C:\a.dll", @"C:\other.dll"]);
+
+        Assert.True(viewModel.DllItems[0].IsLoadedInSelected);
+        Assert.False(viewModel.DllItems[1].IsLoadedInSelected);
+        Assert.Contains("2 of 2 checked match this 64-bit process", viewModel.DllSelectionSummary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -476,7 +553,7 @@ public class MainWindowViewModelTests
         TaskCompletionSource<InjectResult> gate = new();
         BlockingInjectorService blocking = new(gate.Task);
         _processes.Processes = [TestData.Process(10, "game")];
-        MainWindowViewModel viewModel = new(_processes, blocking, _settings, _elevation, _updates, _notifications, _modules, _ledger);
+        MainWindowViewModel viewModel = new(_processes, blocking, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls);
         await viewModel.RefreshAsync();
         viewModel.SelectedProcess = viewModel.VisibleProcesses[0];
         viewModel.AddDlls([@"C:\a.dll"]);
@@ -535,7 +612,7 @@ public class MainWindowViewModelTests
     {
         TaskCompletionSource gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         GatedProcessService processes = new(gate.Task);
-        MainWindowViewModel viewModel = new(processes, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger);
+        MainWindowViewModel viewModel = new(processes, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls);
 
         Task first = viewModel.RefreshIfIdleAsync();
         Task second = viewModel.RefreshIfIdleAsync();
@@ -555,7 +632,7 @@ public class MainWindowViewModelTests
     public async Task Background_refresh_failure_does_not_notify()
     {
         ThrowingProcessService failing = new();
-        MainWindowViewModel viewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger);
+        MainWindowViewModel viewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls);
 
         await viewModel.RefreshIfIdleAsync();
 
@@ -992,12 +1069,13 @@ public class MainWindowViewModelTests
     public void SaveSettings_writes_dlls_and_sort_order()
     {
         MainWindowViewModel viewModel = CreateViewModel();
-        viewModel.DllPaths.Add(@"C:\manual.dll");
+        viewModel.AddDlls([@"C:\manual.dll"]);
 
         viewModel.SaveSettings();
 
         Assert.Equal([@"C:\manual.dll"], _settings.Current.DllPaths);
-        Assert.Equal(1, _settings.SaveCount);
+        Assert.Equal([@"C:\manual.dll"], _settings.Current.Dlls!.Select(entry => entry.Path));
+        Assert.Equal(2, _settings.SaveCount);
     }
 
     private sealed class ThrowingProcessService : IProcessService

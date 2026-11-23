@@ -129,6 +129,23 @@ internal sealed class FakeModuleScanner : IModuleScannerService
     }
 }
 
+internal sealed class FakeDllInspector : IDllInspectorService
+{
+    public DllArchitecture DefaultArchitecture { get; set; } = DllArchitecture.X64;
+
+    public Dictionary<string, DllInspectionResult> Results { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public DllInspectionResult Inspect(string path)
+    {
+        if (Results.TryGetValue(path, out DllInspectionResult result))
+        {
+            return result;
+        }
+
+        return new DllInspectionResult(DllFileStatus.Ok, DefaultArchitecture);
+    }
+}
+
 internal sealed class FakeInjectionStateService : IInjectionStateService
 {
     public InjectionStateData Current { get; } = new();

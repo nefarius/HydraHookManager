@@ -41,6 +41,14 @@ public sealed class JsonSettingsService : ISettingsService
                     Directory.CreateDirectory(directory);
                 }
 
+                if (Current.Dlls is not null)
+                {
+                    Current.DllPaths = Current.Dlls
+                        .Where(entry => entry is not null && !string.IsNullOrWhiteSpace(entry.Path))
+                        .Select(entry => entry.Path)
+                        .ToList();
+                }
+
                 using (FileStream stream = File.Create(temp))
                 {
                     JsonSerializer.Serialize(stream, Current, Options);
@@ -69,6 +77,21 @@ public sealed class JsonSettingsService : ISettingsService
 
             // Valid JSON can still carry an explicit null collection.
             settings.DllPaths ??= [];
+            settings.DllPaths = settings.DllPaths.Where(path => !string.IsNullOrWhiteSpace(path)).ToList();
+            if (settings.Dlls is null)
+            {
+                settings.Dlls = settings.DllPaths
+                    .Select(path => new DllEntrySetting { Path = path, IsChecked = true })
+                    .ToList();
+            }
+            else
+            {
+                settings.Dlls = settings.Dlls
+                    .Where(entry => entry is not null && !string.IsNullOrWhiteSpace(entry.Path))
+                    .ToList();
+                settings.DllPaths = settings.Dlls.Select(entry => entry.Path).ToList();
+            }
+
             return settings;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)

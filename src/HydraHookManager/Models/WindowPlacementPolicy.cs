@@ -22,6 +22,19 @@ public static class WindowPlacementPolicy
     public const double DefaultHeight = 600;
     public const double MinWidth = 700;
     public const double MinHeight = 400;
+    public const double DefaultDllPaneHeight = 180;
+    public const double MinDllPaneHeight = 130;
+    public const double MaxDllPaneHeight = 500;
+
+    public static double ClampDllPaneHeight(double? height)
+    {
+        if (height is not double value || !double.IsFinite(value))
+        {
+            return DefaultDllPaneHeight;
+        }
+
+        return Math.Clamp(value, MinDllPaneHeight, MaxDllPaneHeight);
+    }
 
     private const double TitleBarProbeX = 40;
     private const double TitleBarProbeY = 16;

@@ -81,11 +81,13 @@ public partial class MainWindow : FluentWindow
             ? new Rect(Left, Top, Width, Height)
             : RestoreBounds;
         WindowPlacementPolicy.Write(_viewModel.Settings, WindowState, bounds);
+        _viewModel.Settings.DllPaneHeight = WindowPlacementPolicy.ClampDllPaneHeight(DllPaneRow.ActualHeight);
         _viewModel.SaveSettings();
     }
 
     private void ApplySavedPlacement()
     {
+        DllPaneRow.Height = new GridLength(WindowPlacementPolicy.ClampDllPaneHeight(_viewModel.Settings.DllPaneHeight));
         if (!WindowPlacementPolicy.TryRead(_viewModel.Settings, out WindowPlacementSnapshot saved))
         {
             return;

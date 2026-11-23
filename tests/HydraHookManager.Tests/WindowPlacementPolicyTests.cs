@@ -120,4 +120,14 @@ public class WindowPlacementPolicyTests
         // Body overlaps the monitor but the title bar is above it.
         Assert.False(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(100, -500, 900, 600), [Primary]));
     }
+
+    [Fact]
+    public void ClampDllPaneHeight_uses_the_default_for_missing_or_non_finite_values()
+    {
+        Assert.Equal(WindowPlacementPolicy.DefaultDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(null));
+        Assert.Equal(WindowPlacementPolicy.DefaultDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(double.NaN));
+        Assert.Equal(WindowPlacementPolicy.MinDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(10));
+        Assert.Equal(WindowPlacementPolicy.MaxDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(900));
+        Assert.Equal(240, WindowPlacementPolicy.ClampDllPaneHeight(240));
+    }
 }

@@ -23,8 +23,10 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 - Auto-refresh about every 1.5 seconds while the window is open and not minimized. It pauses while the window is minimized and runs again when the window is activated or restored. The Refresh button and F5 still refresh immediately.
 - If the selected process exits and a newer instance of the same executable starts before another process is selected, that instance is selected. This follows a process only when its creation time was known.
 - Inject and eject one or more DLLs via the bundled [nefarius/Injector](https://github.com/nefarius/Injector) v1.5.0; the matching x86 or x64 binary is picked from the target architecture.
-- DLL list is persisted between sessions; add DLLs with a dialog or drag and drop.
-- Window size, position, state, tree mode, auto-refresh, and the windowed, Direct3D, and injected filters are persisted.
+- DLL list is persisted between sessions, including which rows are checked. Add DLLs with a dialog or drag and drop. Each row shows the PE architecture, a warning when the file is missing or not a valid PE, and a Loaded mark when that DLL is loaded in the selected process.
+- Inject and eject use the checked DLLs that match the selected process architecture. An x86 DLL and an x64 DLL can both stay checked; the other architecture is skipped for that process. Eject still sends a checked DLL that is no longer on disk.
+- The process list and DLL list split can be dragged. The DLL pane height is saved with the window.
+- Window size, position, state, DLL pane height, tree mode, auto-refresh, and the windowed, Direct3D, and injected filters are persisted.
 - "Restart as Administrator" button when injection fails for access reasons.
 - Update check against GitHub Releases (at most once per day; can be disabled in `settings.json`) and a manual "Check for updates" button.
 - Rolling log files (14 days) with a button that opens the log folder.
@@ -36,6 +38,7 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 - The injector does not bypass anti-cheat, protected processes or PPL.
 - Loaded-module scans use `PROCESS_VM_READ` and run for windowed, selected, and ledger-tracked processes. The Direct3D filter scans every process whose creation time is known. Protected processes are not scanned. A non-elevated manager skips processes that already denied a limited query. A module scan can lag one refresh behind the process list.
 - The process tree follows parent PIDs present in the current snapshot. A parent that has already exited is omitted. Auto-refresh polls that snapshot.
+- DLL architecture comes from the PE machine type (`x86`, `x64`, `ARM64`). A DLL whose machine type is something else is not sent to a process whose architecture is known. ARM64 processes are not a supported injection target; the host and bundled injector are x86 and x64 only.
 - Multi-monitor window placement is validated against the virtual screen bounds only.
 - Update check only notifies; it does not download or install anything.
 
@@ -52,7 +55,7 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 
 Data locations (`%LocalAppData%\HydraHookManager`):
 
-- `settings.json` - DLL list, sort order, tree mode, auto-refresh, windowed, Direct3D, and injected filters, window placement, update-check settings.
+- `settings.json` - DLL list and check boxes, sort order, tree mode, auto-refresh, windowed, Direct3D, and injected filters, window placement, DLL pane height, update-check settings. Older files that only have `DllPaths` load with every DLL checked.
 - `state.json` - injected DLL ledger keyed by process id and creation time. It is separate from settings and is pruned when the process exits or the DLL is no longer loaded.
 - `Logs\` - Serilog rolling log files.
 

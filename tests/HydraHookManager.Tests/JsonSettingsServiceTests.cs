@@ -81,6 +81,9 @@ public sealed class JsonSettingsServiceTests : IDisposable
         AppSettings loaded = new JsonSettingsService(SettingsPath).Current;
 
         Assert.Equal([@"C:\a.dll", @"C:\b.dll"], loaded.DllPaths);
+        Assert.NotNull(loaded.Dlls);
+        Assert.Equal([@"C:\a.dll", @"C:\b.dll"], loaded.Dlls.Select(entry => entry.Path));
+        Assert.All(loaded.Dlls, entry => Assert.True(entry.IsChecked));
         Assert.Equal("Id", loaded.SortKey);
         Assert.True(loaded.SortDescending);
         Assert.Equal(11, loaded.WindowLeft);
@@ -95,6 +98,25 @@ public sealed class JsonSettingsServiceTests : IDisposable
         Assert.True(loaded.ShowWindowedOnly);
         Assert.True(loaded.ShowDirect3DOnly);
         Assert.True(loaded.ShowInjectedOnly);
+    }
+
+    [Fact]
+    public void Legacy_dll_paths_migrate_to_checked_entries_and_null_entries_are_dropped()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+        File.WriteAllText(SettingsPath, """{"DllPaths":["C:\\legacy.dll"," "],"Dlls":null}""");
+
+        AppSettings migrated = new JsonSettingsService(SettingsPath).Current;
+
+        Assert.Equal(["C:\\legacy.dll"], migrated.DllPaths);
+        Assert.True(migrated.Dlls!.Single().IsChecked);
+
+        File.WriteAllText(SettingsPath, """{"Dlls":[null,{"Path":"C:\\keep.dll","IsChecked":false}],"DllPaths":["C:\\stale.dll"],"DllPaneHeight":12}""");
+        AppSettings explicitEntries = new JsonSettingsService(SettingsPath).Current;
+
+        Assert.Equal(["C:\\keep.dll"], explicitEntries.DllPaths);
+        Assert.False(explicitEntries.Dlls!.Single().IsChecked);
+        Assert.Equal(12, explicitEntries.DllPaneHeight);
     }
 
     [Fact]
