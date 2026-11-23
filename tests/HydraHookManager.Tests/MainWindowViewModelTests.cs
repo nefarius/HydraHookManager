@@ -165,6 +165,21 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Selection_cleared_during_collection_changes_is_restored()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+        viewModel.VisibleProcesses.CollectionChanged += (_, _) => viewModel.SelectedProcess = null;
+
+        await viewModel.SetFilterAsync("notepad");
+        Assert.Null(viewModel.SelectedProcess);
+
+        await viewModel.SetFilterAsync("");
+
+        Assert.Equal(10, viewModel.SelectedProcess?.Id);
+    }
+
+    [Fact]
     public async Task SortBy_toggles_direction_for_the_same_key_and_resets_for_a_new_key()
     {
         MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
@@ -652,6 +667,48 @@ public class MainWindowViewModelTests
         await viewModel.RefreshAsync();
 
         Assert.Equal(20, viewModel.SelectedProcess?.Id);
+    }
+
+    [Fact]
+    public async Task Refresh_follows_a_relaunch_when_the_selected_process_can_no_longer_be_verified()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\Games\game.exe")
+        ];
+        _processes.LiveCreationTimes[10] = 1000;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+
+        _processes.Processes =
+        [
+            TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\Games\game.exe"),
+            TestData.Process(30, "game", window: "Game", created: 3000, exePath: @"C:\Games\game.exe")
+        ];
+        _processes.LiveCreationTimes.Clear();
+        _processes.LiveCreationTimes[30] = 3000;
+
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(30, viewModel.SelectedProcess?.Id);
+    }
+
+    [Fact]
+    public async Task Refresh_does_not_reuse_a_process_whose_creation_time_is_unknown()
+    {
+        _processes.Processes = [TestData.Process(10, "game", omitCreationTime: true, window: "Game")];
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        ProcessInfo before = viewModel.VisibleProcesses.Single();
+
+        _processes.Processes = [TestData.Process(10, "other", omitCreationTime: true, window: "Other")];
+        await viewModel.RefreshAsync();
+
+        ProcessInfo after = viewModel.VisibleProcesses.Single();
+        Assert.NotSame(before, after);
+        Assert.Equal("other", after.Name);
+        Assert.Equal("Other", after.WindowTitle);
     }
 
     [Fact]

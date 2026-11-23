@@ -16,7 +16,7 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 ## Features
 
 - Process list with icon, name, PID, architecture (32/64-bit) and window title. The filter matches name, window title, PID, or executable path. Columns are sortable.
-- Flat list or parent/child tree. A process is nested only when that parent is in the list and was created at or before the child, so a reused PID is not treated as the parent.
+- Flat list or parent/child tree. A process is nested under a parent that is still in the list. When both creation times are known, the parent must have been created at or before the child, which rejects a reused parent PID. If either creation time is missing, the parent link is best-effort.
 - Windowed-only filter. In the tree, a match stays attached to its ancestor chain.
 - Auto-refresh about every 1.5 seconds while the window is open and not minimized. It pauses while the window is minimized and runs again when the window is activated or restored. The Refresh button and F5 still refresh immediately.
 - If the selected process exits and the same executable starts again before another process is selected, the new instance is selected.

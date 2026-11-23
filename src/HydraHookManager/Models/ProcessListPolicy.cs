@@ -92,7 +92,8 @@ public static class ProcessListPolicy
     }
 
     /// <summary>
-    ///     Returns the newest other instance of <paramref name="targetExePath"/>, skipping the instance that just exited.
+    ///     Returns the newest instance of <paramref name="targetExePath"/> created after <paramref name="previousCreationTime"/>.
+    ///     An older copy of the same executable is left alone.
     /// </summary>
     public static ProcessInfo? FindRelaunchedInstance(
         IReadOnlyList<ProcessInfo> processes,
@@ -113,7 +114,8 @@ public static class ProcessListPolicy
                 continue;
             }
 
-            if (previousCreationTime is long previous && process.CreationTime == previous)
+            if (previousCreationTime is long previous
+                && (process.CreationTime is not long created || created <= previous))
             {
                 continue;
             }
@@ -236,8 +238,7 @@ public static class ProcessListPolicy
                     continue;
                 }
 
-                included.Add(process);
-                contextOnly.Remove(process);
+                IncludeWithAncestors(process, parentOf, included, contextOnly, filter);
                 IncludeDescendants(process, childrenOf, included, contextOnly, filter);
             }
         }
@@ -263,7 +264,8 @@ public static class ProcessListPolicy
         while (current is not null && guard.Add(current))
         {
             included.Add(current);
-            if (IsDirectMatch(current, filter))
+            bool matchedByText = !string.IsNullOrEmpty(filter.Text) && MatchesText(current, filter.Text);
+            if (IsDirectMatch(current, filter) || matchedByText)
             {
                 contextOnly.Remove(current);
             }

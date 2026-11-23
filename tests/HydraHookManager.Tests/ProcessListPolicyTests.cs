@@ -243,6 +243,24 @@ public class ProcessListPolicyTests
     }
 
     [Fact]
+    public void Tree_text_match_on_a_nested_process_keeps_its_ancestors()
+    {
+        List<ProcessViewRow> rows = View(
+        [
+            TestData.Process(1, "root", created: 1),
+            TestData.Process(2, "launcher", parentId: 1, created: 2),
+            TestData.Process(3, "game", parentId: 2, created: 3, window: "Play")
+        ],
+        text: "launcher",
+        windowedOnly: true);
+
+        Assert.Equal([1, 2, 3], rows.Select(row => row.Process.Id));
+        Assert.True(rows[0].IsContextOnly);
+        Assert.False(rows[1].IsContextOnly);
+        Assert.False(rows[2].IsContextOnly);
+    }
+
+    [Fact]
     public void FindRelaunchedInstance_returns_the_newest_other_instance()
     {
         ProcessInfo[] processes =
@@ -255,7 +273,7 @@ public class ProcessListPolicyTests
         Assert.Null(ProcessListPolicy.FindRelaunchedInstance(processes, null, 1000));
         Assert.Null(ProcessListPolicy.FindRelaunchedInstance(processes, "  ", 1000));
         Assert.Null(ProcessListPolicy.FindRelaunchedInstance([processes[0]], @"C:\Games\game.exe", 1000));
-        Assert.Equal(1, ProcessListPolicy.FindRelaunchedInstance(processes, @"C:\Games\game.exe", 3000)?.Id);
+        Assert.Null(ProcessListPolicy.FindRelaunchedInstance(processes, @"C:\Games\game.exe", 3000));
         Assert.Equal(2, ProcessListPolicy.FindRelaunchedInstance(processes, @"C:\Games\game.exe", 1000)?.Id);
     }
 

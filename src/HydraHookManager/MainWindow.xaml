@@ -186,9 +186,12 @@
                                                MinWidth="160">
                                 <ui:GridViewColumn.CellTemplate>
                                     <DataTemplate>
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
-                                                    Margin="{Binding Depth, Converter={StaticResource DepthToMargin}}">
-                                            <Grid Width="16" Height="16" Margin="0,0,2,0" VerticalAlignment="Center">
+                                        <Grid Margin="{Binding Depth, Converter={StaticResource DepthToMargin}}">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid Grid.Column="0" Width="16" Height="16" Margin="0,0,2,0" VerticalAlignment="Center">
                                                 <Grid.Style>
                                                     <Style TargetType="Grid">
                                                         <Setter Property="Visibility" Value="Collapsed" />
@@ -205,7 +208,7 @@
                                                            MinHeight="16"
                                                            Padding="0"
                                                            BorderThickness="0"
-                                                           Focusable="False"
+                                                           Focusable="True"
                                                            Appearance="Transparent"
                                                            VerticalAlignment="Center"
                                                            HorizontalAlignment="Center"
@@ -226,11 +229,12 @@
                                                     </Grid>
                                                 </ui:Button>
                                             </Grid>
-                                            <TextBlock Text="{Binding Name, Mode=OneTime}"
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding Name, Mode=OneTime}"
                                                        TextTrimming="CharacterEllipsis"
                                                        TextWrapping="NoWrap"
                                                        VerticalAlignment="Center" />
-                                        </StackPanel>
+                                        </Grid>
                                     </DataTemplate>
                                 </ui:GridViewColumn.CellTemplate>
                             </ui:GridViewColumn>

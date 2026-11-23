@@ -563,6 +563,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 continue;
             }
 
+            if (incoming.CreationTime is null)
+            {
+                _live.Remove(key);
+                next.Add(incoming);
+                continue;
+            }
+
             if (_live.TryGetValue(key, out ProcessInfo? existing))
             {
                 existing.UpdateFrom(incoming);
@@ -606,19 +613,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 }
             }
 
-            if (sameInstance is null)
+            if (sameInstance is null || !IsSelectionStillValid(selectedId, _selectedProcessCreationTime))
             {
-                if (!string.IsNullOrWhiteSpace(_selectedExePath))
-                {
-                    _relaunchExePath = _selectedExePath;
-                    _relaunchCreationTime = _selectedProcessCreationTime;
-                }
-
-                _selectedProcessId = null;
-                _selectedProcessCreationTime = null;
-            }
-            else if (!IsSelectionStillValid(selectedId, _selectedProcessCreationTime))
-            {
+                ArmRelaunchTracking();
                 _selectedProcessId = null;
                 _selectedProcessCreationTime = null;
             }
@@ -671,10 +668,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
             process.IsContextOnly = row.IsContextOnly;
         }
 
-        SyncVisible(rows);
-        VisibleProcessCount = rows.Count;
-        TotalProcessCount = _processes.Count;
-        RestoreSelection(sameSnapshot);
+        _restoringSelection = true;
+        try
+        {
+            SyncVisible(rows);
+            VisibleProcessCount = rows.Count;
+            TotalProcessCount = _processes.Count;
+            RestoreSelection(sameSnapshot);
+        }
+        finally
+        {
+            _restoringSelection = false;
+        }
     }
 
     private void SyncVisible(List<ProcessViewRow> rows)
@@ -723,6 +728,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             if (!sameSnapshot && !IsSelectionStillValid(id, selectedCreationTime))
             {
+                ArmRelaunchTracking();
                 _selectedProcessId = null;
                 _selectedProcessCreationTime = null;
             }
@@ -739,20 +745,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
         }
 
-        if (ReferenceEquals(SelectedProcess, match))
+        if (!ReferenceEquals(SelectedProcess, match))
+        {
+            SelectedProcess = match;
+        }
+    }
+
+    private void ArmRelaunchTracking()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedExePath))
         {
             return;
         }
 
-        _restoringSelection = true;
-        try
-        {
-            SelectedProcess = match;
-        }
-        finally
-        {
-            _restoringSelection = false;
-        }
+        _relaunchExePath = _selectedExePath;
+        _relaunchCreationTime = _selectedProcessCreationTime;
     }
 
     private bool IsSelectionStillValid(int processId, long? expectedCreationTime)
