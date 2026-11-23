@@ -84,6 +84,32 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task A_failed_refresh_keeps_the_existing_snapshot_and_ledger()
+    {
+        _processes.Processes = [TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\game.exe")];
+        _ledger.Current.Entries.Add(new InjectionLedgerEntry
+        {
+            ProcessId = 10,
+            CreationTime = 1000,
+            ExePath = @"C:\game.exe",
+            DllPaths = [@"C:\a.dll"]
+        });
+        _modules.ResultsByProcess[10] = new ModuleScanResult(ProcessAccessState.RequiresAdmin, [], null);
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        ProcessInfo shown = viewModel.VisibleProcesses.Single();
+        int saves = _ledger.SaveCount;
+
+        _processes.Failure = new InvalidOperationException("enumeration failed");
+        await viewModel.RefreshAsync();
+
+        Assert.Same(shown, viewModel.VisibleProcesses.Single());
+        Assert.Equal([@"C:\a.dll"], _ledger.Current.Entries.Single().DllPaths);
+        Assert.Equal(saves, _ledger.SaveCount);
+        Assert.Contains(_notifications.Messages, message => message.Title == "Process list");
+    }
+
+    [Fact]
     public async Task Filter_narrows_the_list_and_clearing_it_restores_everything()
     {
         MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
@@ -1102,5 +1128,19 @@ public class LoadedModulesViewModelTests
         {
             return _results.Dequeue();
         }
+    }
+}
+
+public class ProcessServiceTests
+{
+    [Fact]
+    public async Task Enumeration_includes_the_current_process_and_skips_the_idle_process()
+    {
+        ProcessService service = new(new FakeElevationService());
+
+        IReadOnlyList<ProcessInfo> processes = await service.GetProcessesAsync();
+
+        Assert.Contains(processes, process => process.Id == Environment.ProcessId);
+        Assert.DoesNotContain(processes, process => process.Id == 0);
     }
 }

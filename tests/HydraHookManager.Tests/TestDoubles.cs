@@ -36,9 +36,16 @@ internal sealed class FakeProcessService : IProcessService
 
     public int GetCalls { get; private set; }
 
+    public Exception? Failure { get; set; }
+
     public Task<IReadOnlyList<ProcessInfo>> GetProcessesAsync(CancellationToken cancellationToken = default)
     {
         GetCalls++;
+        if (Failure is not null)
+        {
+            throw Failure;
+        }
+
         return Task.FromResult<IReadOnlyList<ProcessInfo>>([.. Processes]);
     }
 
