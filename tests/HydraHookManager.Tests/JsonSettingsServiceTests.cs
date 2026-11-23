@@ -26,6 +26,9 @@ public sealed class JsonSettingsServiceTests : IDisposable
         Assert.Empty(service.Current.DllPaths);
         Assert.Equal("Name", service.Current.SortKey);
         Assert.True(service.Current.IsUpdateCheckEnabled);
+        Assert.True(service.Current.IsTreeView);
+        Assert.True(service.Current.IsAutoRefreshEnabled);
+        Assert.False(service.Current.ShowWindowedOnly);
     }
 
     [Fact]
@@ -66,6 +69,9 @@ public sealed class JsonSettingsServiceTests : IDisposable
         writer.Current.WindowState = WindowState.Maximized;
         writer.Current.IsUpdateCheckEnabled = false;
         writer.Current.LastUpdateCheckDate = new DateOnly(2026, 11, 23);
+        writer.Current.IsTreeView = false;
+        writer.Current.IsAutoRefreshEnabled = false;
+        writer.Current.ShowWindowedOnly = true;
 
         writer.Save();
         AppSettings loaded = new JsonSettingsService(SettingsPath).Current;
@@ -80,6 +86,9 @@ public sealed class JsonSettingsServiceTests : IDisposable
         Assert.Equal(WindowState.Maximized, loaded.WindowState);
         Assert.False(loaded.IsUpdateCheckEnabled);
         Assert.Equal(new DateOnly(2026, 11, 23), loaded.LastUpdateCheckDate);
+        Assert.False(loaded.IsTreeView);
+        Assert.False(loaded.IsAutoRefreshEnabled);
+        Assert.True(loaded.ShowWindowedOnly);
     }
 
     [Fact]

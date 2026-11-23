@@ -165,6 +165,21 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Selection_cleared_during_collection_changes_is_restored()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+        viewModel.VisibleProcesses.CollectionChanged += (_, _) => viewModel.SelectedProcess = null;
+
+        await viewModel.SetFilterAsync("notepad");
+        Assert.Null(viewModel.SelectedProcess);
+
+        await viewModel.SetFilterAsync("");
+
+        Assert.Equal(10, viewModel.SelectedProcess?.Id);
+    }
+
+    [Fact]
     public async Task SortBy_toggles_direction_for_the_same_key_and_resets_for_a_new_key()
     {
         MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
@@ -444,6 +459,277 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Refresh_reuses_process_instances_and_updates_window_titles()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        ProcessInfo before = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+        _processes.Processes =
+        [
+            TestData.Process(10, "game", "64-bit", "Game - level 2"),
+            TestData.Process(20, "legacy", "32-bit"),
+            TestData.Process(30, "notepad")
+        ];
+
+        await viewModel.RefreshAsync();
+
+        ProcessInfo after = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+        Assert.Same(before, after);
+        Assert.Equal("Game - level 2", after.WindowTitle);
+    }
+
+    [Fact]
+    public async Task Refresh_removes_processes_that_have_exited()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        _processes.Processes = [TestData.Process(10, "game", "64-bit", "Game")];
+        _processes.LiveCreationTimes.Clear();
+        _processes.LiveCreationTimes[10] = 10 * 1000L;
+
+        await viewModel.RefreshAsync();
+
+        Assert.Equal([10], viewModel.VisibleProcesses.Select(process => process.Id));
+        Assert.Equal(1, viewModel.VisibleProcessCount);
+        Assert.Equal(1, viewModel.TotalProcessCount);
+    }
+
+    [Fact]
+    public async Task RefreshIfIdle_does_not_start_a_second_refresh_while_one_is_running()
+    {
+        TaskCompletionSource gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        GatedProcessService processes = new(gate.Task);
+        MainWindowViewModel viewModel = new(processes, _injector, _settings, _elevation, _updates, _notifications);
+
+        Task first = viewModel.RefreshIfIdleAsync();
+        Task second = viewModel.RefreshIfIdleAsync();
+
+        Assert.Equal(1, processes.GetCalls);
+        Assert.True(viewModel.IsRefreshing);
+
+        gate.SetResult();
+        await first;
+        await second;
+
+        Assert.Equal(1, processes.GetCalls);
+        Assert.False(viewModel.IsRefreshing);
+    }
+
+    [Fact]
+    public async Task Background_refresh_failure_does_not_notify()
+    {
+        ThrowingProcessService failing = new();
+        MainWindowViewModel viewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications);
+
+        await viewModel.RefreshIfIdleAsync();
+
+        Assert.Empty(_notifications.Messages);
+        Assert.False(viewModel.IsRefreshing);
+    }
+
+    [Fact]
+    public async Task Tree_view_nests_children_and_collapse_hides_them()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(1, "launcher", created: 1),
+            TestData.Process(2, "game", parentId: 1, created: 2, window: "Game")
+        ];
+        _processes.LiveCreationTimes[1] = 1;
+        _processes.LiveCreationTimes[2] = 2;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+
+        Assert.Equal([1, 2], viewModel.VisibleProcesses.Select(process => process.Id));
+        Assert.Equal(0, viewModel.VisibleProcesses[0].Depth);
+        Assert.True(viewModel.VisibleProcesses[0].HasChildren);
+        Assert.True(viewModel.VisibleProcesses[0].IsExpanded);
+        Assert.Equal(1, viewModel.VisibleProcesses[1].Depth);
+
+        viewModel.ToggleExpandCommand.Execute(viewModel.VisibleProcesses[0]);
+
+        Assert.Equal([1], viewModel.VisibleProcesses.Select(process => process.Id));
+        Assert.False(viewModel.VisibleProcesses[0].IsExpanded);
+        Assert.True(viewModel.VisibleProcesses[0].HasChildren);
+    }
+
+    [Fact]
+    public async Task Windowed_filter_hides_processes_without_a_window()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+
+        viewModel.ShowWindowedOnly = true;
+
+        Assert.Equal([10], viewModel.VisibleProcesses.Select(process => process.Id));
+        Assert.Equal(1, viewModel.VisibleProcessCount);
+        Assert.Equal(3, viewModel.TotalProcessCount);
+    }
+
+    [Fact]
+    public async Task Filter_matches_pid_and_window_title()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+
+        await viewModel.SetFilterAsync("20");
+        Assert.Equal([20], viewModel.VisibleProcesses.Select(process => process.Id));
+
+        await viewModel.SetFilterAsync("Game");
+        Assert.Equal([10], viewModel.VisibleProcesses.Select(process => process.Id));
+    }
+
+    [Fact]
+    public void Constructor_restores_view_options_without_saving()
+    {
+        _settings.Current.IsTreeView = false;
+        _settings.Current.ShowWindowedOnly = true;
+        _settings.Current.IsAutoRefreshEnabled = false;
+
+        MainWindowViewModel viewModel = CreateViewModel();
+
+        Assert.False(viewModel.IsTreeView);
+        Assert.True(viewModel.ShowWindowedOnly);
+        Assert.False(viewModel.IsAutoRefreshEnabled);
+        Assert.Equal(0, _settings.SaveCount);
+    }
+
+    [Fact]
+    public void Changing_view_options_persists_them()
+    {
+        MainWindowViewModel viewModel = CreateViewModel();
+
+        viewModel.IsTreeView = false;
+        viewModel.ShowWindowedOnly = true;
+        viewModel.IsAutoRefreshEnabled = false;
+
+        Assert.False(_settings.Current.IsTreeView);
+        Assert.True(_settings.Current.ShowWindowedOnly);
+        Assert.False(_settings.Current.IsAutoRefreshEnabled);
+        Assert.Equal(3, _settings.SaveCount);
+    }
+
+    [Fact]
+    public async Task Refresh_reselects_a_relaunch_of_the_same_executable()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\Games\game.exe"),
+            TestData.Process(20, "notepad", window: "Notepad", created: 2000, exePath: @"C:\Windows\notepad.exe")
+        ];
+        _processes.LiveCreationTimes[10] = 1000;
+        _processes.LiveCreationTimes[20] = 2000;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+
+        _processes.Processes =
+        [
+            TestData.Process(30, "game", window: "Game", created: 3000, exePath: @"C:\Games\game.exe"),
+            TestData.Process(20, "notepad", window: "Notepad", created: 2000, exePath: @"C:\Windows\notepad.exe")
+        ];
+        _processes.LiveCreationTimes.Clear();
+        _processes.LiveCreationTimes[30] = 3000;
+        _processes.LiveCreationTimes[20] = 2000;
+
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(30, viewModel.SelectedProcess?.Id);
+    }
+
+    [Fact]
+    public async Task Selecting_another_process_cancels_relaunch_tracking()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\Games\game.exe"),
+            TestData.Process(20, "notepad", window: "Notepad", created: 2000, exePath: @"C:\Windows\notepad.exe")
+        ];
+        _processes.LiveCreationTimes[10] = 1000;
+        _processes.LiveCreationTimes[20] = 2000;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+
+        _processes.Processes =
+        [
+            TestData.Process(20, "notepad", window: "Notepad", created: 2000, exePath: @"C:\Windows\notepad.exe")
+        ];
+        _processes.LiveCreationTimes.Clear();
+        _processes.LiveCreationTimes[20] = 2000;
+        await viewModel.RefreshAsync();
+        Assert.Null(viewModel.SelectedProcess);
+
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 20);
+        _processes.Processes =
+        [
+            TestData.Process(30, "game", window: "Game", created: 3000, exePath: @"C:\Games\game.exe"),
+            TestData.Process(20, "notepad", window: "Notepad", created: 2000, exePath: @"C:\Windows\notepad.exe")
+        ];
+        _processes.LiveCreationTimes[30] = 3000;
+
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(20, viewModel.SelectedProcess?.Id);
+    }
+
+    [Fact]
+    public async Task Refresh_follows_a_relaunch_when_the_selected_process_can_no_longer_be_verified()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\Games\game.exe")
+        ];
+        _processes.LiveCreationTimes[10] = 1000;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+
+        _processes.Processes =
+        [
+            TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\Games\game.exe"),
+            TestData.Process(30, "game", window: "Game", created: 3000, exePath: @"C:\Games\game.exe")
+        ];
+        _processes.LiveCreationTimes.Clear();
+        _processes.LiveCreationTimes[30] = 3000;
+
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(30, viewModel.SelectedProcess?.Id);
+    }
+
+    [Fact]
+    public async Task Refresh_does_not_follow_an_existing_sibling_when_creation_time_is_unknown()
+    {
+        _processes.Processes =
+        [
+            TestData.Process(10, "game", window: "Game", omitCreationTime: true, exePath: @"C:\Games\game.exe"),
+            TestData.Process(20, "game", window: "Game", created: 2000, exePath: @"C:\Games\game.exe")
+        ];
+        _processes.LiveCreationTimes[20] = 2000;
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+
+        await viewModel.RefreshAsync();
+
+        Assert.Null(viewModel.SelectedProcess);
+    }
+
+    [Fact]
+    public async Task Refresh_does_not_reuse_a_process_whose_creation_time_is_unknown()
+    {
+        _processes.Processes = [TestData.Process(10, "game", omitCreationTime: true, window: "Game")];
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        ProcessInfo before = viewModel.VisibleProcesses.Single();
+
+        _processes.Processes = [TestData.Process(10, "other", omitCreationTime: true, window: "Other")];
+        await viewModel.RefreshAsync();
+
+        ProcessInfo after = viewModel.VisibleProcesses.Single();
+        Assert.NotSame(before, after);
+        Assert.Equal("other", after.Name);
+        Assert.Equal("Other", after.WindowTitle);
+    }
+
+    [Fact]
     public void SaveSettings_writes_dlls_and_sort_order()
     {
         MainWindowViewModel viewModel = CreateViewModel();
@@ -460,6 +746,29 @@ public class MainWindowViewModelTests
         public Task<IReadOnlyList<ProcessInfo>> GetProcessesAsync(CancellationToken cancellationToken = default)
         {
             throw new InvalidOperationException("enumeration failed");
+        }
+
+        public Task PopulateMissingIconsAsync(IReadOnlyList<ProcessInfo> processes, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public bool TryGetProcessCreationTime(int processId, out long creationTime)
+        {
+            creationTime = 0;
+            return false;
+        }
+    }
+
+    private sealed class GatedProcessService(Task gate) : IProcessService
+    {
+        public int GetCalls { get; private set; }
+
+        public async Task<IReadOnlyList<ProcessInfo>> GetProcessesAsync(CancellationToken cancellationToken = default)
+        {
+            GetCalls++;
+            await gate.WaitAsync(cancellationToken);
+            return [];
         }
 
         public Task PopulateMissingIconsAsync(IReadOnlyList<ProcessInfo> processes, CancellationToken cancellationToken = default)

@@ -15,10 +15,14 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 
 ## Features
 
-- Process list with icon, name, PID, architecture (32/64-bit) and window title; filter as you type; sortable columns.
+- Process list with icon, name, PID, architecture (32/64-bit) and window title. The filter matches name, window title, PID, or executable path. Columns are sortable.
+- Flat list or parent/child tree. A process is nested under a parent that is still in the list. When both creation times are known, the parent must have been created at or before the child, which rejects a reused parent PID. If either creation time is missing, the parent link is best-effort.
+- Windowed-only filter. In the tree, a windowed process stays attached to its ancestor chain. A text match without a window is included only when it has a windowed descendant.
+- Auto-refresh about every 1.5 seconds while the window is open and not minimized. It pauses while the window is minimized and runs again when the window is activated or restored. The Refresh button and F5 still refresh immediately.
+- If the selected process exits and a newer instance of the same executable starts before another process is selected, that instance is selected. This follows a process only when its creation time was known.
 - Inject and eject one or more DLLs via the bundled [nefarius/Injector](https://github.com/nefarius/Injector) v1.5.0; the matching x86 or x64 binary is picked from the target architecture.
 - DLL list is persisted between sessions; add DLLs with a dialog or drag and drop.
-- Window size, position and state are persisted.
+- Window size, position, state, tree mode, auto-refresh, and the windowed filter are persisted.
 - "Restart as Administrator" button when injection fails for access reasons.
 - Update check against GitHub Releases (at most once per day; can be disabled in `settings.json`) and a manual "Check for updates" button.
 - Rolling log files (14 days) with a button that opens the log folder.
@@ -28,6 +32,7 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 
 - Injection into protected or elevated processes requires running the manager elevated.
 - The injector does not bypass anti-cheat, protected processes or PPL.
+- The process tree follows parent PIDs present in the current snapshot. A parent that has already exited is omitted. Auto-refresh polls that snapshot.
 - Multi-monitor window placement is validated against the virtual screen bounds only.
 - Update check only notifies; it does not download or install anything.
 
@@ -44,7 +49,7 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 
 Data locations (`%LocalAppData%\HydraHookManager`):
 
-- `settings.json` - DLL list, sort order, window placement, update-check settings.
+- `settings.json` - DLL list, sort order, tree mode, auto-refresh, windowed filter, window placement, update-check settings.
 - `Logs\` - Serilog rolling log files.
 
 ## Build (contributors)
