@@ -18,3 +18,7 @@ packages/
 *.log
 Injector.zip
 Injector_extract/
+
+# Local publish/release output
+artifacts/
+release/

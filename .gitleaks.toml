@@ -1,0 +1,4 @@
+title = "HydraHookManager"
+
+[extend]
+useDefault = true

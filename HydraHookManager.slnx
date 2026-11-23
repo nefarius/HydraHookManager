@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/HydraHookManager/HydraHookManager.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/HydraHookManager.Tests/HydraHookManager.Tests.csproj" />
+  </Folder>
+  <Folder Name="/CI/">
+    <File Path=".github/workflows/build.yml" />
+  </Folder>
+</Solution>

@@ -1,45 +1,82 @@
+using System.Globalization;
 using System.IO;
-using CliWrap;
-using CliWrap.Buffered;
+using Microsoft.Extensions.Logging;
 
 namespace HydraHookManager.Services;
 
 public sealed class InjectorService : IInjectorService
 {
-    public async Task<InjectResult> InjectAsync(int processId, bool is64Bit, IReadOnlyList<string> dllPaths, CancellationToken cancellationToken = default)
+    private readonly ICommandRunner _runner;
+    private readonly string _baseDirectory;
+    private readonly ILogger<InjectorService>? _logger;
+
+    public InjectorService(ICommandRunner runner, ILogger<InjectorService>? logger = null)
+        : this(runner, AppContext.BaseDirectory, logger)
+    {
+    }
+
+    internal InjectorService(ICommandRunner runner, string baseDirectory, ILogger<InjectorService>? logger = null)
+    {
+        _runner = runner;
+        _baseDirectory = baseDirectory;
+        _logger = logger;
+    }
+
+    public Task<InjectResult> InjectAsync(int processId, bool is64Bit, IReadOnlyList<string> dllPaths, CancellationToken cancellationToken = default)
+    {
+        return RunAsync("-i", processId, is64Bit, dllPaths, cancellationToken);
+    }
+
+    public Task<InjectResult> EjectAsync(int processId, bool is64Bit, IReadOnlyList<string> dllPaths, CancellationToken cancellationToken = default)
+    {
+        return RunAsync("-e", processId, is64Bit, dllPaths, cancellationToken);
+    }
+
+    private async Task<InjectResult> RunAsync(string action, int processId, bool is64Bit, IReadOnlyList<string> dllPaths, CancellationToken cancellationToken)
     {
         if (dllPaths.Count == 0)
+        {
             return new InjectResult(false, string.Empty, "No DLLs specified.");
+        }
 
-        var injectorPath = GetInjectorPath(is64Bit);
-        if (string.IsNullOrEmpty(injectorPath) || !File.Exists(injectorPath))
+        string injectorPath = GetInjectorPath(is64Bit);
+        if (!File.Exists(injectorPath))
+        {
             return new InjectResult(false, string.Empty, $"Injector not found. Expected at: {injectorPath}");
+        }
 
-        var args = new List<string> { "-p", processId.ToString(), "-i" };
+        List<string> args = ["-p", processId.ToString(CultureInfo.InvariantCulture), action];
         args.AddRange(dllPaths);
 
         try
         {
-            var result = await Cli.Wrap(injectorPath)
-                .WithArguments(args)
-                .WithValidation(CommandResultValidation.None)
-                .ExecuteBufferedAsync(cancellationToken);
+            _logger?.LogInformation("Running {Injector} {Action} on PID {ProcessId} for {Count} DLL(s)", injectorPath, action, processId, dllPaths.Count);
+            CommandOutput result = await _runner.RunAsync(injectorPath, args, cancellationToken);
 
-            var output = result.StandardOutput + (string.IsNullOrEmpty(result.StandardError) ? "" : "\n" + result.StandardError);
-            var success = result.ExitCode == 0 || output.Contains("Successfully injected", StringComparison.OrdinalIgnoreCase);
+            string output = result.StandardOutput.Trim();
+            string error = result.StandardError.Trim();
+            bool success = result.ExitCode == 0;
+            if (!success)
+            {
+                _logger?.LogWarning("Injector exited with {ExitCode}: {Output} {Error}", result.ExitCode, output, error);
+            }
 
-            return new InjectResult(success, output, result.StandardError);
+            return new InjectResult(success, output, error);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
+            _logger?.LogError(ex, "Failed to run Injector");
             return new InjectResult(false, string.Empty, ex.Message);
         }
     }
 
-    private static string? GetInjectorPath(bool is64Bit)
+    internal string GetInjectorPath(bool is64Bit)
     {
-        var baseDir = AppContext.BaseDirectory;
-        var subDir = is64Bit ? "x64" : "x86";
-        return Path.Combine(baseDir, "Injector", subDir, "Injector.exe");
+        string subDir = is64Bit ? "x64" : "x86";
+        return Path.Combine(_baseDirectory, "Injector", subDir, "Injector.exe");
     }
 }
