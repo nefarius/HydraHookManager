@@ -141,39 +141,17 @@ public partial class MainWindow : FluentWindow
             if (selectedId is not int id)
                 return;
 
+            if (!sameSnapshot && !TryValidateRefreshedProcess(id, selectedCreationTime))
+            {
+                _selectedProcessId = null;
+                _selectedProcessCreationTime = null;
+                return;
+            }
+
             foreach (ProcessInfo process in view)
             {
                 if (process.Id != id)
                     continue;
-
-                if (sameSnapshot)
-                {
-                    ProcessListView.SelectedItem = process;
-                    ProcessListView.ScrollIntoView(process);
-                    break;
-                }
-
-                if (selectedCreationTime is not long expectedCreationTime
-                    || process.CreationTime != expectedCreationTime)
-                {
-                    if (selectedCreationTime is long && process.CreationTime is long)
-                    {
-                        _selectedProcessId = null;
-                        _selectedProcessCreationTime = null;
-                    }
-
-                    return;
-                }
-
-                if (!_processService.TryGetProcessCreationTime(id, out var liveCreationTime))
-                    return;
-
-                if (liveCreationTime != process.CreationTime)
-                {
-                    _selectedProcessId = null;
-                    _selectedProcessCreationTime = null;
-                    return;
-                }
 
                 ProcessListView.SelectedItem = process;
                 ProcessListView.ScrollIntoView(process);
@@ -184,6 +162,25 @@ public partial class MainWindow : FluentWindow
         {
             _restoringProcessSelection = false;
         }
+    }
+
+    private bool TryValidateRefreshedProcess(int processId, long? selectedCreationTime)
+    {
+        ProcessInfo? candidate = null;
+        foreach (var process in _processes)
+        {
+            if (process.Id != processId)
+                continue;
+
+            candidate = process;
+            break;
+        }
+
+        return candidate != null
+            && selectedCreationTime is long expectedCreationTime
+            && candidate.CreationTime == expectedCreationTime
+            && _processService.TryGetProcessCreationTime(processId, out var liveCreationTime)
+            && liveCreationTime == candidate.CreationTime;
     }
 
     private void ProcessListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
