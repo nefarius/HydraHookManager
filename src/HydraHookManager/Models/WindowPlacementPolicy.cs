@@ -27,6 +27,9 @@ public static class WindowPlacementPolicy
     private const double TitleBarProbeY = 16;
     private const double MinOverlapWidth = 80;
     private const double TitleBarBandHeight = 32;
+
+    // Three caption buttons at 46 DIPs each (Windows 10/11 standard caption button width).
+    private const double CaptionButtonsWidth = 138;
     private const double MinTitleBarOverlapHeight = 16;
 
     public static void Write(AppSettings settings, WindowState state, Rect normalBounds)
@@ -113,7 +116,12 @@ public static class WindowPlacementPolicy
             window.Left + Math.Min(TitleBarProbeX, window.Width / 2),
             window.Top + Math.Min(TitleBarProbeY, window.Height / 2));
 
-        Rect titleBar = new(window.Left, window.Top, window.Width, Math.Min(TitleBarBandHeight, window.Height));
+        // Draggable caption area: the title bar without the minimize/maximize/close buttons on the right.
+        Rect titleBar = new(
+            window.Left,
+            window.Top,
+            Math.Max(0, window.Width - CaptionButtonsWidth),
+            Math.Min(TitleBarBandHeight, window.Height));
 
         foreach (Rect monitor in monitorWorkAreas)
         {

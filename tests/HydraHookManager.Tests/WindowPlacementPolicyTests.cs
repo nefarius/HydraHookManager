@@ -110,7 +110,9 @@ public class WindowPlacementPolicyTests
     [Fact]
     public void IsVisibleOnAMonitor_accepts_partial_overlap_and_rejects_slivers()
     {
-        Assert.True(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(-800, 100, 900, 600), [Primary]));
+        Assert.True(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(-600, 100, 900, 600), [Primary]));
+        // Only the caption buttons remain on the monitor, so the window could not be dragged back.
+        Assert.False(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(-800, 100, 900, 600), [Primary]));
         Assert.False(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(-880, -570, 900, 600), [Primary]));
         Assert.False(WindowPlacementPolicy.IsVisibleOnAMonitor(new Rect(0, 0, 900, 600), []));
         // Body overlaps the monitor but the title bar is above it.
