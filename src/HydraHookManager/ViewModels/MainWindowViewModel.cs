@@ -23,6 +23,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly IModuleScannerService _moduleScanner;
     private readonly IInjectionStateService _injectionState;
     private readonly IDllInspectorService _dllInspector;
+    private readonly IEngineStateService _engineState;
     private readonly ILogger<MainWindowViewModel>? _logger;
     private readonly Dictionary<ProcessInstanceKey, ProcessInfo> _live = [];
     private readonly Dictionary<ProcessInstanceKey, ModuleScanResult> _scans = [];
@@ -127,6 +128,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         IModuleScannerService moduleScanner,
         IInjectionStateService injectionState,
         IDllInspectorService dllInspector,
+        IEngineStateService engineState,
         ILogger<MainWindowViewModel>? logger = null)
     {
         _processService = processService;
@@ -138,6 +140,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _moduleScanner = moduleScanner;
         _injectionState = injectionState;
         _dllInspector = dllInspector;
+        _engineState = engineState;
         _logger = logger;
 
         AppSettings settings = settingsService.Current;
@@ -949,11 +952,31 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             bool is64Bit = ProcessListPolicy.Is64Bit(selected);
             string[] dlls = [.. selection.Paths];
-            InjectResult result = eject
-                ? await _injectorService.EjectAsync(selected.Id, is64Bit, dlls)
-                : await _injectorService.InjectAsync(selected.Id, is64Bit, dlls);
+            List<string> rehooked = [];
+            List<string> injectPaths = [.. dlls];
+            if (!eject)
+            {
+                injectPaths.Clear();
+                PartitionRehook(selected, dlls, rehooked, injectPaths);
+            }
+
+            InjectResult result;
+            if (!eject && injectPaths.Count == 0)
+            {
+                result = new InjectResult(rehooked.Count > 0, rehooked.Count > 0 ? $"Rehooked {rehooked.Count} loaded HydraHook DLL(s)." : "", rehooked.Count > 0 ? "" : "The loaded DLL could not be rehooked.");
+            }
+            else
+            {
+                result = eject
+                    ? await _injectorService.EjectAsync(selected.Id, is64Bit, dlls)
+                    : await _injectorService.InjectAsync(selected.Id, is64Bit, injectPaths);
+            }
 
             string message = BuildMessage(result);
+            if (rehooked.Count > 0 && injectPaths.Count > 0)
+            {
+                message = $"Rehooked {rehooked.Count} loaded HydraHook DLL(s)." + Environment.NewLine + Environment.NewLine + message;
+            }
             if (selection.SkippedCount > 0)
             {
                 message += Environment.NewLine + Environment.NewLine + selection.SkippedNote();
@@ -1361,43 +1384,62 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private async Task<bool> FinishEjectAsync(ProcessInfo selected, IReadOnlyList<string> dlls, InjectResult result, string message)
     {
-        bool unloaded = result.Success || await ConfirmDllsUnloadedAsync(selected, dlls);
-        if (!unloaded)
+        IReadOnlyList<string> unloaded = result.Success ? dlls : await DllsConfirmedUnloadedAsync(selected, dlls);
+        if (unloaded.Count > 0)
         {
-            if (!_elevationService.IsElevated && LooksLikeAccessProblem(message))
+            RememberInjection(selected, unloaded, eject: true);
+            StartModuleScan(forceAll: false, forceKey: selected.InstanceKey);
+        }
+
+        int requested = ModulePathCount(dlls);
+        if (result.Success || (requested > 0 && unloaded.Count == requested))
+        {
+            if (!result.Success)
             {
-                message += "\n\nThe target process may require administrator rights. Use \"Restart as Admin\" and try again.";
+                message = unloaded.Count == 1
+                    ? "The DLL is no longer loaded in the process."
+                    : "The DLLs are no longer loaded in the process.";
             }
 
-            _notifications.Show("Ejection failed", message, NotificationSeverity.Error, TimeSpan.FromSeconds(8));
-            return false;
+            _notifications.Show("Ejection successful", message, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
+            return true;
         }
 
-        RememberInjection(selected, dlls, eject: true);
-        StartModuleScan(forceAll: false, forceKey: selected.InstanceKey);
-        if (!result.Success)
+        if (!_elevationService.IsElevated && LooksLikeAccessProblem(message))
         {
-            message = dlls.Count == 1
-                ? "The DLL is no longer loaded in the process."
-                : "The DLLs are no longer loaded in the process.";
+            message += "\n\nThe target process may require administrator rights. Use \"Restart as Admin\" and try again.";
         }
 
-        _notifications.Show("Ejection successful", message, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
-        return true;
+        _notifications.Show("Ejection failed", message, NotificationSeverity.Error, TimeSpan.FromSeconds(8));
+        return false;
     }
 
-    private async Task<bool> ConfirmDllsUnloadedAsync(ProcessInfo selected, IReadOnlyList<string> dlls)
+    private async Task<IReadOnlyList<string>> DllsConfirmedUnloadedAsync(ProcessInfo selected, IReadOnlyList<string> dlls)
     {
         try
         {
             ModuleScanResult scan = await _moduleScanner.ScanProcessAsync(selected.Id, selected.CreationTime);
-            return ModuleInspectionPolicy.ReportsDllsUnloaded(scan, dlls);
+            return ModuleInspectionPolicy.DllsConfirmedUnloaded(scan, dlls);
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Could not confirm whether eject removed the DLL from PID {ProcessId}", selected.Id);
-            return false;
+            return [];
         }
+    }
+
+    private static int ModulePathCount(IReadOnlyList<string> dlls)
+    {
+        int count = 0;
+        foreach (string dll in dlls)
+        {
+            if (ModuleInspectionPolicy.CanonicalModulePath(dll).Length > 0)
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private void RememberInjection(ProcessInfo selected, IReadOnlyList<string> dlls, bool eject)
@@ -1413,6 +1455,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
             {
                 _injectionState.Save();
             }
+        }
+
+        if (eject && _watchSession is WatchSessionState session)
+        {
+            WatchPolicy.RememberUserEject(session, selected, dlls);
         }
     }
 
@@ -1467,6 +1514,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     watchKeys.Add(process.InstanceKey);
                 }
 
+                HashSet<ProcessInstanceKey> monitorKeys = [];
+                if (_watchSession is not null)
+                {
+                    foreach (ProcessInstanceKey key in _watchSession.ManagedInstances.Keys)
+                    {
+                        monitorKeys.Add(key);
+                    }
+                }
+
                 targets = ModuleInspectionPolicy.SelectScanTargets(
                     _processes,
                     selected,
@@ -1478,15 +1534,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     ModuleInspectionPolicy.DefaultThrottleTicks,
                     forceAll,
                     forceKey,
-                    watchKeys);
+                    watchKeys,
+                    monitorKeys);
             }
 
             List<(ProcessInstanceKey Key, ModuleScanResult Result)> results = [];
             foreach (ProcessInfo process in targets)
             {
                 token.ThrowIfCancellationRequested();
+                long started = Environment.TickCount64;
                 ModuleScanResult result = await _moduleScanner.ScanProcessAsync(process.Id, process.CreationTime, token);
-                results.Add((process.InstanceKey, result));
+                results.Add((process.InstanceKey, result with { ObservedTicks = started }));
             }
 
             if (token.IsCancellationRequested || version != _scanVersion)
@@ -1579,11 +1637,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
             {
                 process.InjectionState = mark.State;
                 process.InjectedDlls = mark.DllPaths;
+                process.InjectionDetail = mark.StatusDetail;
             }
             else
             {
                 process.InjectionState = InjectionBadgeState.None;
                 process.InjectedDlls = [];
+                process.InjectionDetail = null;
             }
         }
 
@@ -1774,11 +1834,29 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ProcessInfo? ready = WatchPolicy.EvaluateTick(_processes, session, Environment.TickCount64);
         if (ready is null)
         {
+            ConsiderRecovery();
             return;
         }
 
         session.HandledInstances.Add(ready.InstanceKey);
         _ = AutoInjectAsync(ready, session);
+    }
+
+    private void ConsiderRecovery()
+    {
+        WatchSessionState? session = _watchSession;
+        if (session is null || IsOperationRunning)
+        {
+            return;
+        }
+
+        WatchRecoveryRequest? request = WatchPolicy.EvaluateRecoveryTick(_processes, _scans, session, Environment.TickCount64);
+        if (request is null)
+        {
+            return;
+        }
+
+        _ = RecoverAsync(request.Value, session);
     }
 
     private async Task AutoInjectAsync(ProcessInfo process, WatchSessionState session)
@@ -1826,6 +1904,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             if (result.Success)
             {
                 RememberInjection(process, dlls, eject: false);
+                WatchPolicy.RememberManagedInjection(session, process, dlls);
                 StartModuleScan(forceAll: false, forceKey: process.InstanceKey);
                 ReportWatch(
                     session,
@@ -1855,6 +1934,131 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ReportWatch(
                 session,
                 $"Injection into {process.Name} ({process.Id}) failed. Still watching.",
+                ex.Message,
+                NotificationSeverity.Error,
+                TimeSpan.FromSeconds(8));
+        }
+        finally
+        {
+            IsOperationRunning = false;
+        }
+    }
+
+    private void PartitionRehook(ProcessInfo selected, IReadOnlyList<string> dlls, List<string> rehooked, List<string> injectPaths)
+    {
+        if (!_scans.TryGetValue(selected.InstanceKey, out ModuleScanResult? scan)
+            || scan.AccessState != ProcessAccessState.Accessible)
+        {
+            injectPaths.AddRange(dlls);
+            return;
+        }
+
+        foreach (string dll in dlls)
+        {
+            if (TryFindRehookModule(scan, dll, out nuint moduleBase) && _engineState.TrySignalRehook(selected.Id, moduleBase))
+            {
+                rehooked.Add(dll);
+                continue;
+            }
+
+            injectPaths.Add(dll);
+        }
+    }
+
+    private static bool TryFindRehookModule(ModuleScanResult scan, string path, out nuint moduleBase)
+    {
+        moduleBase = 0;
+        if (scan.EngineStates is null)
+        {
+            return false;
+        }
+
+        foreach (LoadedModuleInfo module in scan.Modules)
+        {
+            if (!ModuleInspectionPolicy.SameModulePath(module.FullPath, path))
+            {
+                continue;
+            }
+
+            if (!scan.EngineStates.TryGetValue(module.BaseAddress, out EngineStatusSnapshot status)
+                || !EngineLiveStatePolicy.CanRehook(status))
+            {
+                return false;
+            }
+
+            moduleBase = module.BaseAddress;
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task RecoverAsync(WatchRecoveryRequest request, WatchSessionState session)
+    {
+        if (!ReferenceEquals(_watchSession, session))
+        {
+            return;
+        }
+
+        IsOperationRunning = true;
+        try
+        {
+            ProcessInfo process = request.Process;
+            string name = Path.GetFileName(request.DllPath);
+            if (process.CreationTime is long expected
+                && _processService.TryGetProcessCreationTime(process.Id, out long live)
+                && live != expected)
+            {
+                ReportWatch(session, $"{process.Name} exited before recovery. Still watching.", null, NotificationSeverity.Warning);
+                return;
+            }
+
+            bool ok;
+            if (request.Kind == WatchRecoveryKind.Rehook)
+            {
+                ok = _engineState.TrySignalRehook(process.Id, request.ModuleBase);
+            }
+            else
+            {
+                InjectResult result = await _injectorService.InjectAsync(
+                    process.Id,
+                    ProcessListPolicy.Is64Bit(process),
+                    [request.DllPath]);
+                ok = result.Success;
+            }
+
+            string verb = request.Kind == WatchRecoveryKind.Rehook ? "Rehooked" : "Re-injected";
+            if (ok)
+            {
+                if (request.Kind == WatchRecoveryKind.Reinject)
+                {
+                    RememberInjection(process, [request.DllPath], eject: false);
+                }
+
+                StartModuleScan(forceAll: false, forceKey: process.InstanceKey);
+                ReportWatch(
+                    session,
+                    $"{verb} {name} in {process.Name} (attempt {request.Attempt}/{request.MaxAttempts}). Still watching.",
+                    $"{verb} {name} in {process.Name} (attempt {request.Attempt}/{request.MaxAttempts}). Still watching.",
+                    NotificationSeverity.Success,
+                    TimeSpan.FromSeconds(4));
+            }
+            else
+            {
+                ReportWatch(
+                    session,
+                    $"Could not recover {name} in {process.Name} (attempt {request.Attempt}/{request.MaxAttempts}). Still watching.",
+                    $"Could not recover {name} in {process.Name}.",
+                    NotificationSeverity.Warning,
+                    TimeSpan.FromSeconds(6));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Watch recovery failed");
+            ReportWatch(
+                session,
+                $"Could not recover {Path.GetFileName(request.DllPath)} in {request.Process.Name}. Still watching.",
                 ex.Message,
                 NotificationSeverity.Error,
                 TimeSpan.FromSeconds(8));

@@ -16,10 +16,12 @@ public sealed class ModuleScannerService : IModuleScannerService
     private const int PathBufferChars = 1024;
 
     private readonly IElevationService _elevation;
+    private readonly IEngineStateService _engineState;
 
-    public ModuleScannerService(IElevationService elevation)
+    public ModuleScannerService(IElevationService elevation, IEngineStateService engineState)
     {
         _elevation = elevation;
+        _engineState = engineState;
     }
 
     public Task<ModuleScanResult> ScanProcessAsync(int processId, long? expectedCreationTime, CancellationToken cancellationToken = default)
@@ -61,7 +63,7 @@ public sealed class ModuleScannerService : IModuleScannerService
                 }
             }
 
-            return ReadModules(process, cancellationToken);
+            return ReadModules(process, processId, cancellationToken);
         }
         finally
         {
@@ -69,7 +71,7 @@ public sealed class ModuleScannerService : IModuleScannerService
         }
     }
 
-    private static unsafe ModuleScanResult ReadModules(HANDLE process, CancellationToken cancellationToken)
+    private unsafe ModuleScanResult ReadModules(HANDLE process, int processId, CancellationToken cancellationToken)
     {
         uint capacity = 256;
         while (capacity <= 1_048_576)
@@ -110,6 +112,7 @@ public sealed class ModuleScannerService : IModuleScannerService
             }
 
             List<LoadedModuleInfo> loaded = new(count);
+            Dictionary<nuint, EngineStatusSnapshot> states = [];
             for (int index = 0; index < count; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -118,11 +121,17 @@ public sealed class ModuleScannerService : IModuleScannerService
                     return Empty(ProcessAccessState.Unknown);
                 }
 
+                nuint baseAddress = (nuint)modules[index].Value;
                 uint size = QueryModuleSize(process, modules[index]);
-                loaded.Add(new LoadedModuleInfo(Path.GetFileName(path), path, (nuint)modules[index].Value, size));
+                loaded.Add(new LoadedModuleInfo(Path.GetFileName(path), path, baseAddress, size));
+                if (baseAddress != 0 && _engineState.TryReadStatus(processId, baseAddress, out EngineStatusSnapshot snapshot))
+                {
+                    states[baseAddress] = snapshot;
+                }
             }
 
-            return new ModuleScanResult(ProcessAccessState.Accessible, loaded, ModuleInspectionPolicy.DetectGraphicsApi(loaded));
+            IReadOnlyDictionary<nuint, EngineStatusSnapshot>? published = states.Count == 0 ? null : states;
+            return new ModuleScanResult(ProcessAccessState.Accessible, loaded, ModuleInspectionPolicy.DetectGraphicsApi(loaded), published);
         }
 
         return Empty(ProcessAccessState.Unknown);

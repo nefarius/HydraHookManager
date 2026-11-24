@@ -22,6 +22,7 @@ public sealed class ProcessInfo : INotifyPropertyChanged
     private string? _graphicsApi;
     private InjectionBadgeState _injectionState;
     private IReadOnlyList<string> _injectedDlls = [];
+    private string? _injectionDetail;
 
     public required int Id { get; init; }
 
@@ -105,10 +106,31 @@ public sealed class ProcessInfo : INotifyPropertyChanged
         }
     }
 
+    public string? InjectionDetail
+    {
+        get => _injectionDetail;
+        set
+        {
+            if (_injectionDetail == value)
+            {
+                return;
+            }
+
+            _injectionDetail = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(InjectionTooltip));
+        }
+    }
+
     public string InjectionTooltip
     {
         get
         {
+            if (!string.IsNullOrWhiteSpace(_injectionDetail))
+            {
+                return _injectionDetail;
+            }
+
             if (_injectedDlls.Count > 0)
             {
                 return string.Join(Environment.NewLine, _injectedDlls);

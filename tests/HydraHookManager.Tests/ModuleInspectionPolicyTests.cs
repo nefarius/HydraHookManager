@@ -114,6 +114,55 @@ public class ModuleInspectionPolicyTests
             null);
         Assert.False(ModuleInspectionPolicy.ReportsDllsUnloaded(devicePath, [@"D:\games\a.dll"]));
         Assert.False(ModuleInspectionPolicy.ReportsDllsUnloaded(new(ProcessAccessState.RequiresAdmin, [], null), [@"C:\a.dll"]));
+
+        LoadedModuleInfo pinned = new("a.dll", @"C:\a.dll", 0x1200, 10);
+        ModuleScanResult stopped = new(
+            ProcessAccessState.Accessible,
+            [pinned],
+            null,
+            new Dictionary<nuint, EngineStatusSnapshot>
+            {
+                [pinned.BaseAddress] = new EngineStatusSnapshot(
+                    EngineLifecycleState.Stopped,
+                    EngineShutdownOrigin.FreeLibrary,
+                    0,
+                    1,
+                    EngineStatusFlags.None,
+                    1)
+            });
+        Assert.True(ModuleInspectionPolicy.ReportsDllsUnloaded(stopped, [@"C:\a.dll"]));
+    }
+
+    [Fact]
+    public void DllsConfirmedUnloaded_returns_only_the_paths_missing_from_an_accessible_scan()
+    {
+        ModuleScanResult scan = new(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("b.dll", @"C:\b.dll", 0, 10)],
+            null);
+
+        IReadOnlyList<string> unloaded = ModuleInspectionPolicy.DllsConfirmedUnloaded(scan, [@"C:/a.dll", @"C:\b.dll"]);
+
+        Assert.Equal([@"C:/a.dll"], unloaded);
+        Assert.False(ModuleInspectionPolicy.ReportsDllsUnloaded(scan, [@"C:/a.dll", @"C:\b.dll"]));
+        Assert.Empty(ModuleInspectionPolicy.DllsConfirmedUnloaded(new(ProcessAccessState.RequiresAdmin, [], null), [@"C:\a.dll"]));
+    }
+
+    [Fact]
+    public void DllsConfirmedUnloaded_accepts_a_removed_dll_when_another_directory_has_the_same_name()
+    {
+        ModuleScanResult scan = new(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("hook.dll", @"C:\other\hook.dll", 0, 10)],
+            null);
+
+        Assert.Equal([@"C:\mods\hook.dll"], ModuleInspectionPolicy.DllsConfirmedUnloaded(scan, [@"C:\mods\hook.dll"]));
+
+        ModuleScanResult devicePath = new(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("hook.dll", @"\Device\HarddiskVolume3\hook.dll", 0, 10)],
+            null);
+        Assert.Empty(ModuleInspectionPolicy.DllsConfirmedUnloaded(devicePath, [@"C:\mods\hook.dll"]));
     }
 
     [Fact]

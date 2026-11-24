@@ -18,7 +18,8 @@ public enum InjectionBadgeState
 {
     None = 0,
     Verified,
-    TrackedUnverified
+    TrackedUnverified,
+    Stopped
 }
 
 /// <summary>
@@ -28,8 +29,11 @@ public readonly record struct LoadedModuleInfo(string Name, string FullPath, nui
 
 /// <summary>
 ///     Result of reading one process. <see cref="GraphicsApi"/> is set only when the scan could read modules.
+///     <see cref="ObservedTicks"/> is the tick count when the scan started. Zero means the caller did not record it.
 /// </summary>
 public sealed record ModuleScanResult(
     ProcessAccessState AccessState,
     IReadOnlyList<LoadedModuleInfo> Modules,
-    string? GraphicsApi);
+    string? GraphicsApi,
+    IReadOnlyDictionary<nuint, EngineStatusSnapshot>? EngineStates = null,
+    long ObservedTicks = 0);

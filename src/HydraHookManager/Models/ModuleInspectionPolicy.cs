@@ -104,13 +104,16 @@ public static class ModuleInspectionPolicy
         long throttleTicks,
         bool forceAll,
         ProcessInstanceKey? forceKey,
-        IReadOnlySet<ProcessInstanceKey>? watchKeys = null)
+        IReadOnlySet<ProcessInstanceKey>? watchKeys = null,
+        IReadOnlySet<ProcessInstanceKey>? monitorKeys = null,
+        long monitorThrottleTicks = 1_500)
     {
         List<ProcessInfo> targets = [];
         foreach (ProcessInfo process in processes)
         {
             if (!IsScanCandidate(process, selectedKey, trackedKeys, scanAllAccessible)
-                && !IsWatchTarget(process, watchKeys))
+                && !IsWatchTarget(process, watchKeys)
+                && !IsWatchTarget(process, monitorKeys))
             {
                 continue;
             }
@@ -126,12 +129,14 @@ public static class ModuleInspectionPolicy
             }
 
             bool watchTarget = IsWatchTarget(process, watchKeys);
+            bool monitored = IsWatchTarget(process, monitorKeys);
             bool forced = forceAll
                           || watchTarget
                           || (forceKey is ProcessInstanceKey key && key.Equals(process.InstanceKey));
+            long limit = monitored ? monitorThrottleTicks : throttleTicks;
             if (!forced
                 && lastScanTicks.TryGetValue(process.InstanceKey, out long last)
-                && nowTicks - last < throttleTicks)
+                && nowTicks - last < limit)
             {
                 continue;
             }
@@ -171,7 +176,8 @@ public static class ModuleInspectionPolicy
 
     /// <summary>
     ///     An accessible scan that no longer lists these DLLs means eject removed them.
-    ///     File names count too, because a module path can be a device path.
+    ///     A device path can match by file name. Two different full paths do not.
+    ///     A mapped HydraHook DLL whose engine stopped because of <c>FreeLibrary</c> counts as unloaded.
     /// </summary>
     public static bool ReportsDllsUnloaded(ModuleScanResult scan, IReadOnlyList<string> dllPaths)
     {
@@ -180,11 +186,33 @@ public static class ModuleInspectionPolicy
             return false;
         }
 
+        return DllsConfirmedUnloaded(scan, dllPaths).Count == CountModulePaths(dllPaths);
+    }
+
+    /// <summary>
+    ///     Paths from <paramref name="dllPaths"/> that an accessible scan no longer lists.
+    ///     A non-accessible scan confirms nothing.
+    /// </summary>
+    public static IReadOnlyList<string> DllsConfirmedUnloaded(ModuleScanResult scan, IReadOnlyList<string> dllPaths)
+    {
+        if (scan.AccessState != ProcessAccessState.Accessible)
+        {
+            return [];
+        }
+
         HashSet<string> loadedPaths = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> loadedNames = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> unidentifiedNames = new(StringComparer.OrdinalIgnoreCase);
         foreach (LoadedModuleInfo module in scan.Modules)
         {
-            string path = NormalizeModulePath(module.FullPath);
+            if (scan.EngineStates is not null
+                && scan.EngineStates.TryGetValue(module.BaseAddress, out EngineStatusSnapshot status)
+                && EngineLiveStatePolicy.CountsAsUnloaded(status))
+            {
+                continue;
+            }
+
+            string path = CanonicalModulePath(module.FullPath);
             if (path.Length > 0)
             {
                 loadedPaths.Add(path);
@@ -196,27 +224,85 @@ public static class ModuleInspectionPolicy
                 name = module.Name;
             }
 
-            if (!string.IsNullOrWhiteSpace(name))
+            if (string.IsNullOrWhiteSpace(name))
             {
-                loadedNames.Add(name);
+                continue;
+            }
+
+            loadedNames.Add(name);
+            if (!HasPathIdentity(path))
+            {
+                unidentifiedNames.Add(name);
             }
         }
 
+        List<string> unloaded = [];
         foreach (string dllPath in dllPaths)
         {
-            string path = NormalizeModulePath(dllPath);
+            string path = CanonicalModulePath(dllPath);
             if (path.Length == 0)
             {
                 continue;
             }
 
-            if (loadedPaths.Contains(path) || loadedNames.Contains(Path.GetFileName(path)))
+            if (loadedPaths.Contains(path) || MatchesByFileName(path, loadedNames, unidentifiedNames))
             {
-                return false;
+                continue;
+            }
+
+            unloaded.Add(dllPath);
+        }
+
+        return unloaded;
+    }
+
+    private static bool MatchesByFileName(string path, HashSet<string> loadedNames, HashSet<string> unidentifiedNames)
+    {
+        string name = Path.GetFileName(path);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        return HasPathIdentity(path) ? unidentifiedNames.Contains(name) : loadedNames.Contains(name);
+    }
+
+    private static bool HasPathIdentity(string path)
+    {
+        return path.Contains(Path.DirectorySeparatorChar)
+               && !path.StartsWith(@"\Device\", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static string CanonicalModulePath(string? path)
+    {
+        string normalized = NormalizeModulePath(path);
+        if (normalized.Length == 0)
+        {
+            return "";
+        }
+
+        return normalized.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+    }
+
+    public static bool SameModulePath(string? left, string? right)
+    {
+        string wanted = CanonicalModulePath(left);
+        string actual = CanonicalModulePath(right);
+        return wanted.Length > 0 && string.Equals(wanted, actual, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int CountModulePaths(IReadOnlyList<string> dllPaths)
+    {
+        int count = 0;
+        foreach (string dllPath in dllPaths)
+        {
+            if (CanonicalModulePath(dllPath).Length > 0)
+            {
+                count++;
             }
         }
 
-        return true;
+        return count;
     }
 
     public static string NormalizeModulePath(string? path)
