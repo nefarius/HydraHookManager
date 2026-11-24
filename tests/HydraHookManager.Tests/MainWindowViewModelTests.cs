@@ -1390,9 +1390,12 @@ public class MainWindowViewModelTests
         viewModel.AddDlls([@"C:\a.dll", @"C:\b.dll"]);
         viewModel.DllItems[1].IsChecked = false;
         viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\watched.exe", Trigger = WatchTrigger.WaitForWindow, DelayMs = 15 });
+        List<string?> changedProperties = [];
+        viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
         Assert.False(viewModel.HasSavedProfiles);
         viewModel.SaveProfile("Alpha");
         Assert.True(viewModel.HasSavedProfiles);
+        Assert.Contains(nameof(MainWindowViewModel.HasSavedProfiles), changedProperties);
 
         InjectionProfile alpha = _settings.Current.Profiles.Single(profile => profile.Name == "Alpha");
         Assert.Equal([@"C:\a.dll", @"C:\b.dll"], alpha.Dlls.Select(entry => entry.Path));
@@ -1419,8 +1422,10 @@ public class MainWindowViewModelTests
         Assert.DoesNotContain(_settings.Current.Profiles, profile => profile.Name == "Alpha");
 
         viewModel.ActiveProfileName = "Beta";
+        changedProperties.Clear();
         viewModel.DeleteActiveProfile();
         Assert.False(viewModel.HasSavedProfiles);
+        Assert.Contains(nameof(MainWindowViewModel.HasSavedProfiles), changedProperties);
     }
 
     [Fact]
