@@ -182,6 +182,115 @@ public class WatchPolicyTests
         Assert.Equal(30_000, WatchPolicy.ClampDelayMs(40_000));
     }
 
+    [Fact]
+    public void Recovery_rehooks_a_pinned_post_quit_stop_after_the_grace_period()
+    {
+        ProcessInfo game = TestData.Process(7, "game.exe", created: 70, exePath: @"C:\game.exe");
+        WatchSessionState session = Session(WatchTrigger.OnLaunch);
+        const string dll = @"C:\HydraHook-FPS.dll";
+        WatchPolicy.RememberManagedInjection(session, game, [dll]);
+        Dictionary<ProcessInstanceKey, ModuleScanResult> scans = new()
+        {
+            [game.InstanceKey] = ScanStopped(dll, (nuint)0x14000000, EngineShutdownOrigin.PostQuitMessage, rehook: true)
+        };
+
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], scans, session, 1_000));
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], scans, session, 2_499));
+        WatchRecoveryRequest? request = WatchPolicy.EvaluateRecoveryTick([game], scans, session, 2_500);
+
+        Assert.NotNull(request);
+        Assert.Equal(WatchRecoveryKind.Rehook, request.Value.Kind);
+        Assert.Equal(dll, request.Value.DllPath);
+        Assert.Equal((nuint)0x14000000, request.Value.ModuleBase);
+        Assert.Equal(1, request.Value.Attempt);
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], scans, session, 2_500));
+        Assert.NotNull(WatchPolicy.EvaluateRecoveryTick([game], scans, session, 2_500 + WatchPolicy.RecoveryCooldownMs));
+    }
+
+    [Fact]
+    public void Recovery_reinjects_a_missing_dll_and_ignores_user_ejects_and_other_origins()
+    {
+        ProcessInfo game = TestData.Process(8, "game.exe", created: 80, exePath: @"C:\game.exe");
+        WatchSessionState session = Session(WatchTrigger.OnLaunch);
+        const string dll = @"C:\HydraHook-FPS.dll";
+        WatchPolicy.RememberManagedInjection(session, game, [dll]);
+        WatchPolicy.SeedExistingProcesses([game], session);
+        Dictionary<ProcessInstanceKey, ModuleScanResult> empty = new()
+        {
+            [game.InstanceKey] = new ModuleScanResult(ProcessAccessState.Accessible, [], null)
+        };
+
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], empty, session, 0));
+        WatchRecoveryRequest? reinject = WatchPolicy.EvaluateRecoveryTick([game], empty, session, WatchPolicy.RecoveryGraceMs);
+        Assert.Equal(WatchRecoveryKind.Reinject, reinject?.Kind);
+
+        WatchPolicy.RememberUserEject(session, game, [dll]);
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], empty, session, 20_000));
+
+        ProcessInfo other = TestData.Process(9, "game.exe", created: 90, exePath: @"C:\game.exe");
+        WatchSessionState seeded = Session(WatchTrigger.OnLaunch);
+        WatchPolicy.SeedExistingProcesses([other], seeded);
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([other], empty, seeded, 10_000));
+
+        WatchSessionState ignored = Session(WatchTrigger.OnLaunch);
+        WatchPolicy.RememberManagedInjection(ignored, game, [dll]);
+        foreach (EngineShutdownOrigin origin in new[]
+                 {
+                     EngineShutdownOrigin.ExitProcess,
+                     EngineShutdownOrigin.FreeLibrary,
+                     EngineShutdownOrigin.ManualUnhook
+                 })
+        {
+            Dictionary<ProcessInstanceKey, ModuleScanResult> scans = new()
+            {
+                [game.InstanceKey] = ScanStopped(dll, 0x14000000, origin, rehook: true)
+            };
+            Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], scans, ignored, 10_000));
+        }
+    }
+
+    [Fact]
+    public void Recovery_stops_after_three_attempts()
+    {
+        ProcessInfo game = TestData.Process(11, "game.exe", created: 110, exePath: @"C:\game.exe");
+        WatchSessionState session = Session(WatchTrigger.OnLaunch);
+        const string dll = @"C:\HydraHook-FPS.dll";
+        WatchPolicy.RememberManagedInjection(session, game, [dll]);
+        Dictionary<ProcessInstanceKey, ModuleScanResult> scans = new()
+        {
+            [game.InstanceKey] = new ModuleScanResult(ProcessAccessState.Accessible, [], null)
+        };
+
+        long now = 0;
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], scans, session, now));
+        now = WatchPolicy.RecoveryGraceMs;
+        for (int attempt = 1; attempt <= WatchPolicy.MaxRecoveryAttempts; attempt++)
+        {
+            WatchRecoveryRequest? request = WatchPolicy.EvaluateRecoveryTick([game], scans, session, now);
+            Assert.Equal(attempt, request?.Attempt);
+            now += WatchPolicy.RecoveryCooldownMs;
+        }
+
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], scans, session, now));
+    }
+
+    private static ModuleScanResult ScanStopped(string path, nuint baseAddress, EngineShutdownOrigin origin, bool rehook)
+    {
+        LoadedModuleInfo module = new(Path.GetFileName(path), path, baseAddress, 4096);
+        EngineStatusSnapshot status = new(
+            EngineLifecycleState.Stopped,
+            origin,
+            8,
+            1,
+            rehook ? EngineStatusFlags.RehookSupported : EngineStatusFlags.None,
+            1);
+        return new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [module],
+            "D3D12",
+            new Dictionary<nuint, EngineStatusSnapshot> { [baseAddress] = status });
+    }
+
     private static WatchSessionState Session(WatchTrigger trigger, int delayMs = 0)
     {
         return new WatchSessionState(new WatchConfig

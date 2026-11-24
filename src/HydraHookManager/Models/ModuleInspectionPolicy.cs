@@ -104,13 +104,16 @@ public static class ModuleInspectionPolicy
         long throttleTicks,
         bool forceAll,
         ProcessInstanceKey? forceKey,
-        IReadOnlySet<ProcessInstanceKey>? watchKeys = null)
+        IReadOnlySet<ProcessInstanceKey>? watchKeys = null,
+        IReadOnlySet<ProcessInstanceKey>? monitorKeys = null,
+        long monitorThrottleTicks = 1_500)
     {
         List<ProcessInfo> targets = [];
         foreach (ProcessInfo process in processes)
         {
             if (!IsScanCandidate(process, selectedKey, trackedKeys, scanAllAccessible)
-                && !IsWatchTarget(process, watchKeys))
+                && !IsWatchTarget(process, watchKeys)
+                && !IsWatchTarget(process, monitorKeys))
             {
                 continue;
             }
@@ -126,12 +129,14 @@ public static class ModuleInspectionPolicy
             }
 
             bool watchTarget = IsWatchTarget(process, watchKeys);
+            bool monitored = IsWatchTarget(process, monitorKeys);
             bool forced = forceAll
                           || watchTarget
                           || (forceKey is ProcessInstanceKey key && key.Equals(process.InstanceKey));
+            long limit = monitored ? monitorThrottleTicks : throttleTicks;
             if (!forced
                 && lastScanTicks.TryGetValue(process.InstanceKey, out long last)
-                && nowTicks - last < throttleTicks)
+                && nowTicks - last < limit)
             {
                 continue;
             }
@@ -172,6 +177,7 @@ public static class ModuleInspectionPolicy
     /// <summary>
     ///     An accessible scan that no longer lists these DLLs means eject removed them.
     ///     File names count too, because a module path can be a device path.
+    ///     A mapped HydraHook DLL whose engine stopped because of <c>FreeLibrary</c> counts as unloaded.
     /// </summary>
     public static bool ReportsDllsUnloaded(ModuleScanResult scan, IReadOnlyList<string> dllPaths)
     {
@@ -184,6 +190,13 @@ public static class ModuleInspectionPolicy
         HashSet<string> loadedNames = new(StringComparer.OrdinalIgnoreCase);
         foreach (LoadedModuleInfo module in scan.Modules)
         {
+            if (scan.EngineStates is not null
+                && scan.EngineStates.TryGetValue(module.BaseAddress, out EngineStatusSnapshot status)
+                && EngineLiveStatePolicy.CountsAsUnloaded(status))
+            {
+                continue;
+            }
+
             string path = NormalizeModulePath(module.FullPath);
             if (path.Length > 0)
             {

@@ -114,6 +114,23 @@ public class ModuleInspectionPolicyTests
             null);
         Assert.False(ModuleInspectionPolicy.ReportsDllsUnloaded(devicePath, [@"D:\games\a.dll"]));
         Assert.False(ModuleInspectionPolicy.ReportsDllsUnloaded(new(ProcessAccessState.RequiresAdmin, [], null), [@"C:\a.dll"]));
+
+        LoadedModuleInfo pinned = new("a.dll", @"C:\a.dll", 0x1200, 10);
+        ModuleScanResult stopped = new(
+            ProcessAccessState.Accessible,
+            [pinned],
+            null,
+            new Dictionary<nuint, EngineStatusSnapshot>
+            {
+                [pinned.BaseAddress] = new EngineStatusSnapshot(
+                    EngineLifecycleState.Stopped,
+                    EngineShutdownOrigin.FreeLibrary,
+                    0,
+                    1,
+                    EngineStatusFlags.None,
+                    1)
+            });
+        Assert.True(ModuleInspectionPolicy.ReportsDllsUnloaded(stopped, [@"C:\a.dll"]));
     }
 
     [Fact]

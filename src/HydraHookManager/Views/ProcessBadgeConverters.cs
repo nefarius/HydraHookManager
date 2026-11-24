@@ -59,7 +59,9 @@ public sealed class InjectionBadgeTextConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        return value is InjectionBadgeState.Verified ? "Injected" : "Tracked";
+        return value is InjectionBadgeState.Verified ? "Injected"
+            : value is InjectionBadgeState.Stopped ? "Stopped"
+            : "Tracked";
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
@@ -75,10 +77,16 @@ public sealed class InjectionBadgeBrushConverter : IValueConverter
 {
     private static readonly SolidColorBrush Verified = Create(Color.FromArgb(0x44, 0x3C, 0xB0, 0x6B));
     private static readonly SolidColorBrush Tracked = Create(Color.FromArgb(0x44, 0xD9, 0x77, 0x06));
+    private static readonly SolidColorBrush Stopped = Create(Color.FromArgb(0x55, 0xE1, 0x5D, 0x4A));
 
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
     {
-        return value is InjectionBadgeState.Verified ? Verified : Tracked;
+        return value switch
+        {
+            InjectionBadgeState.Verified => Verified,
+            InjectionBadgeState.Stopped => Stopped,
+            _ => Tracked
+        };
     }
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)

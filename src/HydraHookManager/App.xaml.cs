@@ -53,6 +53,7 @@ public partial class App : Application
         services.AddSingleton<ICommandRunner, CliWrapCommandRunner>();
         services.AddSingleton<IInjectorService, InjectorService>();
         services.AddSingleton<IProcessService, ProcessService>();
+        services.AddSingleton<IEngineStateService, EngineStateService>();
         services.AddSingleton<IModuleScannerService, ModuleScannerService>();
         services.AddSingleton<IInjectionStateService, JsonInjectionStateService>();
         services.AddSingleton<IDllInspectorService, PeDllInspectorService>();

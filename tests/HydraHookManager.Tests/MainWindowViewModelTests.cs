@@ -27,7 +27,8 @@ public class MainWindowViewModelTests
             _notifications,
             _modules,
             _ledger,
-            _dlls);
+            _dlls,
+            new EngineStateService());
     }
 
     private async Task<MainWindowViewModel> CreateLoadedViewModelAsync()
@@ -76,7 +77,7 @@ public class MainWindowViewModelTests
     {
         MainWindowViewModel viewModel = CreateViewModel();
         ThrowingProcessService failing = new();
-        MainWindowViewModel failingViewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls);
+        MainWindowViewModel failingViewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls, new EngineStateService());
 
         await failingViewModel.RefreshAsync();
 
@@ -571,7 +572,7 @@ public class MainWindowViewModelTests
         TaskCompletionSource<InjectResult> gate = new();
         BlockingInjectorService blocking = new(gate.Task);
         _processes.Processes = [TestData.Process(10, "game")];
-        MainWindowViewModel viewModel = new(_processes, blocking, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls);
+        MainWindowViewModel viewModel = new(_processes, blocking, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls, new EngineStateService());
         await viewModel.RefreshAsync();
         viewModel.SelectedProcess = viewModel.VisibleProcesses[0];
         viewModel.AddDlls([@"C:\a.dll"]);
@@ -630,7 +631,7 @@ public class MainWindowViewModelTests
     {
         TaskCompletionSource gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
         GatedProcessService processes = new(gate.Task);
-        MainWindowViewModel viewModel = new(processes, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls);
+        MainWindowViewModel viewModel = new(processes, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls, new EngineStateService());
 
         Task first = viewModel.RefreshIfIdleAsync();
         Task second = viewModel.RefreshIfIdleAsync();
@@ -650,7 +651,7 @@ public class MainWindowViewModelTests
     public async Task Background_refresh_failure_does_not_notify()
     {
         ThrowingProcessService failing = new();
-        MainWindowViewModel viewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls);
+        MainWindowViewModel viewModel = new(failing, _injector, _settings, _elevation, _updates, _notifications, _modules, _ledger, _dlls, new EngineStateService());
 
         await viewModel.RefreshIfIdleAsync();
 

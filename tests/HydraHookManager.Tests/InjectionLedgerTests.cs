@@ -161,6 +161,79 @@ public class InjectionLedgerTests
         }
     }
 
+    [Fact]
+    public void PruneAndReconcile_uses_engine_state_for_stopped_unloaded_and_hooked_dlls()
+    {
+        const string pinned = @"C:\HydraHook-FPS.dll";
+        const string plain = @"C:\plain.dll";
+        ProcessInfo game = TestData.Process(10, "game", created: 1000, exePath: @"C:\game.exe");
+        List<InjectionLedgerEntry> entries = [];
+        InjectionLedgerPolicy.RecordInject(entries, 10, 1000, @"C:\game.exe", [pinned]);
+        Dictionary<ProcessInstanceKey, ProcessInjectionMark> marks = [];
+
+        InjectionLedgerPolicy.PruneAndReconcile(
+            entries,
+            [game],
+            new Dictionary<ProcessInstanceKey, ModuleScanResult>
+            {
+                [game.InstanceKey] = EngineScan(pinned, 0x1000, EngineLifecycleState.Stopped, EngineShutdownOrigin.PostQuitMessage, 0)
+            },
+            [],
+            marks);
+        Assert.Equal(InjectionBadgeState.Stopped, marks[game.InstanceKey].State);
+        Assert.Contains("Stopped (PostQuitMessage)", marks[game.InstanceKey].StatusDetail);
+
+        marks.Clear();
+        bool unloaded = InjectionLedgerPolicy.PruneAndReconcile(
+            entries,
+            [game],
+            new Dictionary<ProcessInstanceKey, ModuleScanResult>
+            {
+                [game.InstanceKey] = EngineScan(pinned, 0x1000, EngineLifecycleState.Stopped, EngineShutdownOrigin.FreeLibrary, 0)
+            },
+            [pinned],
+            marks);
+        Assert.True(unloaded);
+        Assert.Empty(entries);
+        Assert.False(marks.ContainsKey(game.InstanceKey));
+
+        InjectionLedgerPolicy.RecordInject(entries, 10, 1000, @"C:\game.exe", [pinned, plain]);
+        marks.Clear();
+        InjectionLedgerPolicy.PruneAndReconcile(
+            entries,
+            [game],
+            new Dictionary<ProcessInstanceKey, ModuleScanResult>
+            {
+                [game.InstanceKey] = EngineScan(pinned, 0x2000, EngineLifecycleState.Hooked, EngineShutdownOrigin.None, 8, plainModule: plain)
+            },
+            [],
+            marks);
+        Assert.Equal(InjectionBadgeState.Verified, marks[game.InstanceKey].State);
+        Assert.Contains("Hooked (D3D12)", marks[game.InstanceKey].StatusDetail);
+        Assert.Contains(plain, marks[game.InstanceKey].DllPaths);
+    }
+
+    private static ModuleScanResult EngineScan(
+        string path,
+        nuint baseAddress,
+        EngineLifecycleState state,
+        EngineShutdownOrigin origin,
+        uint gameVersion,
+        string? plainModule = null)
+    {
+        List<LoadedModuleInfo> modules = [new(Path.GetFileName(path), path, baseAddress, 4096)];
+        Dictionary<nuint, EngineStatusSnapshot> states = new()
+        {
+            [baseAddress] = new EngineStatusSnapshot(state, origin, gameVersion, 1, EngineStatusFlags.RehookSupported, 1)
+        };
+        if (plainModule is not null)
+        {
+            modules.Add(new LoadedModuleInfo(Path.GetFileName(plainModule), plainModule, 0x3000, 4096));
+        }
+
+        return new ModuleScanResult(ProcessAccessState.Accessible, modules, null, states);
+    }
+
     private static ModuleScanResult Scan(params LoadedModuleInfo[] modules)
     {
         return new ModuleScanResult(ProcessAccessState.Accessible, modules, null);

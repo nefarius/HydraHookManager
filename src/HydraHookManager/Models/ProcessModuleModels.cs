@@ -18,7 +18,8 @@ public enum InjectionBadgeState
 {
     None = 0,
     Verified,
-    TrackedUnverified
+    TrackedUnverified,
+    Stopped
 }
 
 /// <summary>
@@ -32,4 +33,5 @@ public readonly record struct LoadedModuleInfo(string Name, string FullPath, nui
 public sealed record ModuleScanResult(
     ProcessAccessState AccessState,
     IReadOnlyList<LoadedModuleInfo> Modules,
-    string? GraphicsApi);
+    string? GraphicsApi,
+    IReadOnlyDictionary<nuint, EngineStatusSnapshot>? EngineStates = null);

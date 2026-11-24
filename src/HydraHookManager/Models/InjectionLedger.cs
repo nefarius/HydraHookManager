@@ -25,7 +25,10 @@ public sealed class InjectionStateData
 /// <summary>
 ///     Badge to apply to one live process after ledger reconciliation.
 /// </summary>
-public readonly record struct ProcessInjectionMark(InjectionBadgeState State, IReadOnlyList<string> DllPaths);
+public readonly record struct ProcessInjectionMark(
+    InjectionBadgeState State,
+    IReadOnlyList<string> DllPaths,
+    string? StatusDetail = null);
 
 /// <summary>
 ///     Pure updates for the injection ledger. Entries without a known creation time are never stored.
@@ -163,11 +166,17 @@ public static class InjectionLedgerPolicy
             bool accessible = scans.TryGetValue(key, out ModuleScanResult? scan) && scan.AccessState == ProcessAccessState.Accessible;
             if (accessible)
             {
-                List<string> loaded = MatchLoaded(scan!.Modules, entry?.DllPaths, configuredDllPaths);
-                if (loaded.Count > 0)
+                EngineModuleClassification classified = Classify(scan!.Modules, scan.EngineStates, entry?.DllPaths, configuredDllPaths);
+                if (classified.Active.Count > 0)
                 {
-                    marks[key] = new ProcessInjectionMark(InjectionBadgeState.Verified, loaded);
+                    List<string> loaded = [.. classified.Active, .. classified.Stopped];
+                    marks[key] = new ProcessInjectionMark(InjectionBadgeState.Verified, loaded, classified.Detail);
                     changed |= Upsert(entries, entry, process, created, loaded);
+                }
+                else if (classified.Stopped.Count > 0)
+                {
+                    marks[key] = new ProcessInjectionMark(InjectionBadgeState.Stopped, classified.Stopped, classified.Detail);
+                    changed |= Upsert(entries, entry, process, created, classified.Stopped);
                 }
                 else if (entry is not null)
                 {
@@ -280,12 +289,21 @@ public static class InjectionLedgerPolicy
         return changed;
     }
 
-    private static List<string> MatchLoaded(
+    private readonly record struct EngineModuleClassification(
+        List<string> Active,
+        List<string> Stopped,
+        string? Detail);
+
+    private static EngineModuleClassification Classify(
         IReadOnlyList<LoadedModuleInfo> modules,
+        IReadOnlyDictionary<nuint, EngineStatusSnapshot>? states,
         IReadOnlyList<string>? tracked,
         IReadOnlyList<string> configured)
     {
-        List<string> matched = [];
+        List<string> active = [];
+        List<string> stopped = [];
+        List<string> lines = [];
+        bool sawEngine = false;
         foreach (LoadedModuleInfo module in modules)
         {
             if (string.IsNullOrWhiteSpace(module.FullPath))
@@ -293,13 +311,40 @@ public static class InjectionLedgerPolicy
                 continue;
             }
 
-            if (ContainsPath(tracked, module.FullPath) || ContainsPath(configured, module.FullPath))
+            if (!ContainsPath(tracked, module.FullPath) && !ContainsPath(configured, module.FullPath))
             {
-                AddUnique(matched, module.FullPath);
+                continue;
+            }
+
+            EngineStatusSnapshot? status = null;
+            if (states is not null && states.TryGetValue(module.BaseAddress, out EngineStatusSnapshot found))
+            {
+                status = found;
+                sawEngine = true;
+            }
+
+            if (status is EngineStatusSnapshot engine && EngineLiveStatePolicy.CountsAsUnloaded(engine))
+            {
+                lines.Add(EngineLiveStatePolicy.Describe(module.Name, engine));
+                continue;
+            }
+
+            if (status is EngineStatusSnapshot stoppedEngine && stoppedEngine.IsStoppedLike)
+            {
+                AddUnique(stopped, module.FullPath);
+                lines.Add(EngineLiveStatePolicy.Describe(module.Name, stoppedEngine));
+                continue;
+            }
+
+            AddUnique(active, module.FullPath);
+            if (status is EngineStatusSnapshot live)
+            {
+                lines.Add(EngineLiveStatePolicy.Describe(module.Name, live));
             }
         }
 
-        return matched;
+        string? detail = sawEngine && lines.Count > 0 ? string.Join(Environment.NewLine, lines) : null;
+        return new EngineModuleClassification(active, stopped, detail);
     }
 
     private static InjectionLedgerEntry? Find(List<InjectionLedgerEntry> entries, int processId, long creationTime)
