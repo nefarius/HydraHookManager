@@ -1523,8 +1523,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             foreach (ProcessInfo process in targets)
             {
                 token.ThrowIfCancellationRequested();
+                long started = Environment.TickCount64;
                 ModuleScanResult result = await _moduleScanner.ScanProcessAsync(process.Id, process.CreationTime, token);
-                results.Add((process.InstanceKey, result));
+                results.Add((process.InstanceKey, result with { ObservedTicks = started }));
             }
 
             if (token.IsCancellationRequested || version != _scanVersion)
@@ -1985,6 +1986,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             ProcessInfo process = request.Process;
             string name = Path.GetFileName(request.DllPath);
+            if (process.CreationTime is long expected
+                && _processService.TryGetProcessCreationTime(process.Id, out long live)
+                && live != expected)
+            {
+                ReportWatch(session, $"{process.Name} exited before recovery. Still watching.", null, NotificationSeverity.Warning);
+                return;
+            }
+
             bool ok;
             if (request.Kind == WatchRecoveryKind.Rehook)
             {
@@ -1992,14 +2001,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
             }
             else
             {
-                if (process.CreationTime is long expected
-                    && _processService.TryGetProcessCreationTime(process.Id, out long live)
-                    && live != expected)
-                {
-                    ReportWatch(session, $"{process.Name} exited before re-injection. Still watching.", null, NotificationSeverity.Warning);
-                    return;
-                }
-
                 InjectResult result = await _injectorService.InjectAsync(
                     process.Id,
                     ProcessListPolicy.Is64Bit(process),

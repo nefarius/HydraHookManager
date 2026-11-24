@@ -300,6 +300,13 @@ public static class WatchPolicy
                     continue;
                 }
 
+                if (dll.LastAttemptTicks != 0
+                    && scan.ObservedTicks != 0
+                    && scan.ObservedTicks <= dll.LastAttemptTicks)
+                {
+                    continue;
+                }
+
                 if (!TryGetRecovery(scan, dll.Path, out WatchRecoveryKind kind, out nuint moduleBase))
                 {
                     dll.DegradedSinceTicks = null;
@@ -361,19 +368,37 @@ public static class WatchPolicy
 
     private static LoadedModuleInfo? FindModule(IReadOnlyList<LoadedModuleInfo> modules, string path)
     {
-        foreach (LoadedModuleInfo module in modules)
+        string wanted = NormalizeComparedPath(path);
+        if (wanted.Length > 0)
         {
-            if (string.Equals(module.FullPath, path, StringComparison.OrdinalIgnoreCase))
+            foreach (LoadedModuleInfo module in modules)
             {
-                return module;
+                string modulePath = NormalizeComparedPath(module.FullPath);
+                if (modulePath.Length > 0
+                    && string.Equals(modulePath, wanted, StringComparison.OrdinalIgnoreCase))
+                {
+                    return module;
+                }
             }
         }
 
-        string name = Path.GetFileName(path);
+        bool wantedHasDirectory = wanted.Contains(Path.DirectorySeparatorChar);
+        string name = Path.GetFileName(wanted.Length > 0 ? wanted : path);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
         LoadedModuleInfo? matched = null;
         foreach (LoadedModuleInfo module in modules)
         {
-            string moduleName = string.IsNullOrWhiteSpace(module.FullPath) ? module.Name : Path.GetFileName(module.FullPath);
+            string modulePath = NormalizeComparedPath(module.FullPath);
+            if (wantedHasDirectory && modulePath.Length > 0)
+            {
+                continue;
+            }
+
+            string moduleName = modulePath.Length == 0 ? module.Name : Path.GetFileName(modulePath);
             if (!string.Equals(moduleName, name, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -388,6 +413,17 @@ public static class WatchPolicy
         }
 
         return matched;
+    }
+
+    private static string NormalizeComparedPath(string? path)
+    {
+        string normalized = ModuleInspectionPolicy.NormalizeModulePath(path);
+        if (normalized.Length == 0)
+        {
+            return "";
+        }
+
+        return normalized.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
     }
 
     private static WatchManagedDll? FindManagedDll(WatchManagedInstance managed, string path)
