@@ -1390,7 +1390,9 @@ public class MainWindowViewModelTests
         viewModel.AddDlls([@"C:\a.dll", @"C:\b.dll"]);
         viewModel.DllItems[1].IsChecked = false;
         viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\watched.exe", Trigger = WatchTrigger.WaitForWindow, DelayMs = 15 });
+        Assert.False(viewModel.HasSavedProfiles);
         viewModel.SaveProfile("Alpha");
+        Assert.True(viewModel.HasSavedProfiles);
 
         InjectionProfile alpha = _settings.Current.Profiles.Single(profile => profile.Name == "Alpha");
         Assert.Equal([@"C:\a.dll", @"C:\b.dll"], alpha.Dlls.Select(entry => entry.Path));
@@ -1413,7 +1415,12 @@ public class MainWindowViewModelTests
 
         Assert.Null(viewModel.ActiveProfileName);
         Assert.Equal(["Beta"], viewModel.ProfileNames);
+        Assert.True(viewModel.HasSavedProfiles);
         Assert.DoesNotContain(_settings.Current.Profiles, profile => profile.Name == "Alpha");
+
+        viewModel.ActiveProfileName = "Beta";
+        viewModel.DeleteActiveProfile();
+        Assert.False(viewModel.HasSavedProfiles);
     }
 
     [Fact]

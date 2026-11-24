@@ -22,8 +22,8 @@ public static class WindowPlacementPolicy
     public const double DefaultHeight = 600;
     public const double MinWidth = 700;
     public const double MinHeight = 400;
-    public const double DefaultDllPaneHeight = 180;
-    public const double MinDllPaneHeight = 170;
+    public const double DefaultDllPaneHeight = 280;
+    public const double MinDllPaneHeight = 240;
     public const double MaxDllPaneHeight = 500;
     public const double ProcessListMinHeight = 160;
 

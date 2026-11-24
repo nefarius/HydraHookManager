@@ -128,8 +128,8 @@ public class WindowPlacementPolicyTests
         Assert.Equal(WindowPlacementPolicy.DefaultDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(double.NaN));
         Assert.Equal(WindowPlacementPolicy.MinDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(10));
         Assert.Equal(WindowPlacementPolicy.MaxDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(900));
-        Assert.Equal(240, WindowPlacementPolicy.ClampDllPaneHeight(240));
-        Assert.Equal(180, WindowPlacementPolicy.ClampDllPaneHeight(180, 240));
+        Assert.Equal(300, WindowPlacementPolicy.ClampDllPaneHeight(300));
+        Assert.Equal(WindowPlacementPolicy.MinDllPaneHeight, WindowPlacementPolicy.ClampDllPaneHeight(180, 400));
         Assert.Equal(200, WindowPlacementPolicy.ClampDllPaneHeight(400, 200));
         Assert.Equal(80, WindowPlacementPolicy.ClampDllPaneHeight(180, 80));
     }
@@ -137,16 +137,16 @@ public class WindowPlacementPolicyTests
     [Fact]
     public void ResolveDllPaneSize_restores_the_requested_height_when_space_returns()
     {
-        (double requested, double display) = WindowPlacementPolicy.ResolveDllPaneSize(200, 200, 200, 160);
-        Assert.Equal(200, requested);
+        (double requested, double display) = WindowPlacementPolicy.ResolveDllPaneSize(300, 300, 300, 160);
+        Assert.Equal(300, requested);
         Assert.Equal(160, display);
 
-        (requested, display) = WindowPlacementPolicy.ResolveDllPaneSize(requested, display, display, 240);
-        Assert.Equal(200, requested);
-        Assert.Equal(200, display);
+        (requested, display) = WindowPlacementPolicy.ResolveDllPaneSize(requested, display, display, 360);
+        Assert.Equal(300, requested);
+        Assert.Equal(300, display);
 
-        (requested, display) = WindowPlacementPolicy.ResolveDllPaneSize(requested, 250, display, 400);
-        Assert.Equal(250, requested);
-        Assert.Equal(250, display);
+        (requested, display) = WindowPlacementPolicy.ResolveDllPaneSize(requested, 350, display, 400);
+        Assert.Equal(350, requested);
+        Assert.Equal(350, display);
     }
 }

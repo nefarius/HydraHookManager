@@ -20,6 +20,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Resource Include="..\..\assets\HydraHook.ico">
+      <Link>Assets\HydraHook.ico</Link>
+    </Resource>
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="Resources\Injector\x86\Injector.exe">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>Injector\x86\Injector.exe</Link>
