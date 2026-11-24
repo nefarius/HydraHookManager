@@ -186,6 +186,20 @@ public static class ModuleInspectionPolicy
             return false;
         }
 
+        return DllsConfirmedUnloaded(scan, dllPaths).Count == CountModulePaths(dllPaths);
+    }
+
+    /// <summary>
+    ///     Paths from <paramref name="dllPaths"/> that an accessible scan no longer lists.
+    ///     A non-accessible scan confirms nothing.
+    /// </summary>
+    public static IReadOnlyList<string> DllsConfirmedUnloaded(ModuleScanResult scan, IReadOnlyList<string> dllPaths)
+    {
+        if (scan.AccessState != ProcessAccessState.Accessible)
+        {
+            return [];
+        }
+
         HashSet<string> loadedPaths = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> loadedNames = new(StringComparer.OrdinalIgnoreCase);
         foreach (LoadedModuleInfo module in scan.Modules)
@@ -197,7 +211,7 @@ public static class ModuleInspectionPolicy
                 continue;
             }
 
-            string path = NormalizeModulePath(module.FullPath);
+            string path = CanonicalModulePath(module.FullPath);
             if (path.Length > 0)
             {
                 loadedPaths.Add(path);
@@ -215,9 +229,10 @@ public static class ModuleInspectionPolicy
             }
         }
 
+        List<string> unloaded = [];
         foreach (string dllPath in dllPaths)
         {
-            string path = NormalizeModulePath(dllPath);
+            string path = CanonicalModulePath(dllPath);
             if (path.Length == 0)
             {
                 continue;
@@ -225,11 +240,45 @@ public static class ModuleInspectionPolicy
 
             if (loadedPaths.Contains(path) || loadedNames.Contains(Path.GetFileName(path)))
             {
-                return false;
+                continue;
+            }
+
+            unloaded.Add(dllPath);
+        }
+
+        return unloaded;
+    }
+
+    public static string CanonicalModulePath(string? path)
+    {
+        string normalized = NormalizeModulePath(path);
+        if (normalized.Length == 0)
+        {
+            return "";
+        }
+
+        return normalized.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+    }
+
+    public static bool SameModulePath(string? left, string? right)
+    {
+        string wanted = CanonicalModulePath(left);
+        string actual = CanonicalModulePath(right);
+        return wanted.Length > 0 && string.Equals(wanted, actual, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int CountModulePaths(IReadOnlyList<string> dllPaths)
+    {
+        int count = 0;
+        foreach (string dllPath in dllPaths)
+        {
+            if (CanonicalModulePath(dllPath).Length > 0)
+            {
+                count++;
             }
         }
 
-        return true;
+        return count;
     }
 
     public static string NormalizeModulePath(string? path)

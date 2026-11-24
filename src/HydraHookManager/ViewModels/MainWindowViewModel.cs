@@ -1384,43 +1384,62 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private async Task<bool> FinishEjectAsync(ProcessInfo selected, IReadOnlyList<string> dlls, InjectResult result, string message)
     {
-        bool unloaded = result.Success || await ConfirmDllsUnloadedAsync(selected, dlls);
-        if (!unloaded)
+        IReadOnlyList<string> unloaded = result.Success ? dlls : await DllsConfirmedUnloadedAsync(selected, dlls);
+        if (unloaded.Count > 0)
         {
-            if (!_elevationService.IsElevated && LooksLikeAccessProblem(message))
+            RememberInjection(selected, unloaded, eject: true);
+            StartModuleScan(forceAll: false, forceKey: selected.InstanceKey);
+        }
+
+        int requested = ModulePathCount(dlls);
+        if (result.Success || (requested > 0 && unloaded.Count == requested))
+        {
+            if (!result.Success)
             {
-                message += "\n\nThe target process may require administrator rights. Use \"Restart as Admin\" and try again.";
+                message = unloaded.Count == 1
+                    ? "The DLL is no longer loaded in the process."
+                    : "The DLLs are no longer loaded in the process.";
             }
 
-            _notifications.Show("Ejection failed", message, NotificationSeverity.Error, TimeSpan.FromSeconds(8));
-            return false;
+            _notifications.Show("Ejection successful", message, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
+            return true;
         }
 
-        RememberInjection(selected, dlls, eject: true);
-        StartModuleScan(forceAll: false, forceKey: selected.InstanceKey);
-        if (!result.Success)
+        if (!_elevationService.IsElevated && LooksLikeAccessProblem(message))
         {
-            message = dlls.Count == 1
-                ? "The DLL is no longer loaded in the process."
-                : "The DLLs are no longer loaded in the process.";
+            message += "\n\nThe target process may require administrator rights. Use \"Restart as Admin\" and try again.";
         }
 
-        _notifications.Show("Ejection successful", message, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
-        return true;
+        _notifications.Show("Ejection failed", message, NotificationSeverity.Error, TimeSpan.FromSeconds(8));
+        return false;
     }
 
-    private async Task<bool> ConfirmDllsUnloadedAsync(ProcessInfo selected, IReadOnlyList<string> dlls)
+    private async Task<IReadOnlyList<string>> DllsConfirmedUnloadedAsync(ProcessInfo selected, IReadOnlyList<string> dlls)
     {
         try
         {
             ModuleScanResult scan = await _moduleScanner.ScanProcessAsync(selected.Id, selected.CreationTime);
-            return ModuleInspectionPolicy.ReportsDllsUnloaded(scan, dlls);
+            return ModuleInspectionPolicy.DllsConfirmedUnloaded(scan, dlls);
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Could not confirm whether eject removed the DLL from PID {ProcessId}", selected.Id);
-            return false;
+            return [];
         }
+    }
+
+    private static int ModulePathCount(IReadOnlyList<string> dlls)
+    {
+        int count = 0;
+        foreach (string dll in dlls)
+        {
+            if (ModuleInspectionPolicy.CanonicalModulePath(dll).Length > 0)
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private void RememberInjection(ProcessInfo selected, IReadOnlyList<string> dlls, bool eject)
@@ -1956,7 +1975,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         foreach (LoadedModuleInfo module in scan.Modules)
         {
-            if (!string.Equals(module.FullPath, path, StringComparison.OrdinalIgnoreCase))
+            if (!ModuleInspectionPolicy.SameModulePath(module.FullPath, path))
             {
                 continue;
             }

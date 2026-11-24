@@ -417,20 +417,14 @@ public static class WatchPolicy
 
     private static string NormalizeComparedPath(string? path)
     {
-        string normalized = ModuleInspectionPolicy.NormalizeModulePath(path);
-        if (normalized.Length == 0)
-        {
-            return "";
-        }
-
-        return normalized.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+        return ModuleInspectionPolicy.CanonicalModulePath(path);
     }
 
     private static WatchManagedDll? FindManagedDll(WatchManagedInstance managed, string path)
     {
         foreach (WatchManagedDll dll in managed.Dlls)
         {
-            if (string.Equals(dll.Path, path, StringComparison.OrdinalIgnoreCase))
+            if (ModuleInspectionPolicy.SameModulePath(dll.Path, path))
             {
                 return dll;
             }

@@ -134,6 +134,21 @@ public class ModuleInspectionPolicyTests
     }
 
     [Fact]
+    public void DllsConfirmedUnloaded_returns_only_the_paths_missing_from_an_accessible_scan()
+    {
+        ModuleScanResult scan = new(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("b.dll", @"C:\b.dll", 0, 10)],
+            null);
+
+        IReadOnlyList<string> unloaded = ModuleInspectionPolicy.DllsConfirmedUnloaded(scan, [@"C:/a.dll", @"C:\b.dll"]);
+
+        Assert.Equal([@"C:/a.dll"], unloaded);
+        Assert.False(ModuleInspectionPolicy.ReportsDllsUnloaded(scan, [@"C:/a.dll", @"C:\b.dll"]));
+        Assert.Empty(ModuleInspectionPolicy.DllsConfirmedUnloaded(new(ProcessAccessState.RequiresAdmin, [], null), [@"C:\a.dll"]));
+    }
+
+    [Fact]
     public void OrderModulesForInspector_pins_injected_then_graphics_and_marks_user_dlls_ejectable()
     {
         LoadedModuleInfo injected = Module(@"D:\mods\hook.dll");

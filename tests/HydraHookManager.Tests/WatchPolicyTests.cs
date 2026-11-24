@@ -271,6 +271,23 @@ public class WatchPolicyTests
     }
 
     [Fact]
+    public void Recovery_treats_an_equivalent_eject_path_as_the_managed_dll()
+    {
+        ProcessInfo game = TestData.Process(15, "game.exe", created: 150, exePath: @"C:\game.exe");
+        WatchSessionState session = Session(WatchTrigger.OnLaunch);
+        WatchPolicy.RememberManagedInjection(session, game, [@"C:/mods/hook.dll"]);
+        WatchPolicy.RememberUserEject(session, game, [@"C:\mods\hook.dll"]);
+        Dictionary<ProcessInstanceKey, ModuleScanResult> scans = new()
+        {
+            [game.InstanceKey] = new ModuleScanResult(ProcessAccessState.Accessible, [], null)
+        };
+
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], scans, session, 0));
+        Assert.Null(WatchPolicy.EvaluateRecoveryTick([game], scans, session, WatchPolicy.RecoveryGraceMs));
+        Assert.True(session.ManagedInstances[game.InstanceKey].Dlls[0].UserEjected);
+    }
+
+    [Fact]
     public void Recovery_matches_an_equivalent_path_and_a_pathless_module_name()
     {
         ProcessInfo game = TestData.Process(13, "game.exe", created: 130, exePath: @"C:\game.exe");
