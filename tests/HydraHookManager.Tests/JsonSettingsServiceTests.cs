@@ -164,6 +164,26 @@ public sealed class JsonSettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void An_unknown_watch_trigger_falls_back_without_discarding_the_file()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+        File.WriteAllText(SettingsPath, """
+            {
+              "DllPaths":["C:\\kept.dll"],
+              "Profiles":[{"Name":"Alpha","Dlls":[{"Path":"C:\\a.dll","IsChecked":true}],"Watch":{"Target":"game.exe","Trigger":"FutureTrigger","DelayMs":5}}],
+              "ActiveProfileName":"Alpha"
+            }
+            """);
+
+        AppSettings loaded = new JsonSettingsService(SettingsPath).Current;
+
+        Assert.Equal([@"C:\kept.dll"], loaded.DllPaths);
+        Assert.Equal("Alpha", loaded.ActiveProfileName);
+        Assert.Equal(WatchTrigger.WaitForWindow, Assert.Single(loaded.Profiles).Watch!.Trigger);
+        Assert.Equal("game.exe", loaded.Profiles[0].Watch!.Target);
+    }
+
+    [Fact]
     public void An_unknown_active_profile_name_is_cleared()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);

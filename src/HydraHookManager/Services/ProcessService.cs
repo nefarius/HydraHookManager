@@ -165,7 +165,7 @@ public sealed class ProcessService : IProcessService
                         }
                     }
 
-                    windowTitles.TryGetValue(processId, out var windowTitle);
+                    bool hasWindow = windowTitles.TryGetValue(processId, out var windowTitle);
                     ImageSource? icon = null;
                     if (exePath is not null)
                         _iconCache.TryGetValue(exePath, out icon);
@@ -178,6 +178,7 @@ public sealed class ProcessService : IProcessService
                         ParentId = unchecked((int)entry.th32ParentProcessID),
                         Icon = icon,
                         WindowTitle = string.IsNullOrWhiteSpace(windowTitle) ? null : windowTitle,
+                        HasWindow = hasWindow,
                         ExePath = exePath,
                         CreationTime = creationTime,
                         AccessState = access
@@ -376,9 +377,9 @@ public sealed class ProcessService : IProcessService
         }, DispatcherPriority.Background);
     }
 
-    private static unsafe Dictionary<uint, string> CollectWindowTitles()
+    private static unsafe Dictionary<uint, string?> CollectWindowTitles()
     {
-        var titles = new Dictionary<uint, string>();
+        var titles = new Dictionary<uint, string?>();
 
         unsafe BOOL Callback(HWND hwnd, LPARAM lParam)
         {
@@ -389,17 +390,22 @@ public sealed class ProcessService : IProcessService
                 return true;
 
             _ = PInvoke.GetWindowThreadProcessId(hwnd, out var processId);
-            if (processId == 0 || titles.ContainsKey(processId))
+            if (processId == 0)
+                return true;
+
+            if (titles.TryGetValue(processId, out string? existing) && !string.IsNullOrEmpty(existing))
                 return true;
 
             var length = PInvoke.GetWindowTextLength(hwnd);
             if (length <= 0)
+            {
+                titles.TryAdd(processId, null);
                 return true;
+            }
 
             var buffer = new char[length + 1];
             var copied = PInvoke.GetWindowText(hwnd, buffer);
-            if (copied > 0)
-                titles[processId] = new string(buffer, 0, copied);
+            titles[processId] = copied > 0 ? new string(buffer, 0, copied) : null;
 
             return true;
         }

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace HydraHookManager.Models;
@@ -19,7 +20,7 @@ public sealed class WatchConfig
 {
     public string Target { get; set; } = "";
 
-    [JsonConverter(typeof(JsonStringEnumConverter))]
+    [JsonConverter(typeof(WatchTriggerJsonConverter))]
     public WatchTrigger Trigger { get; set; } = WatchTrigger.WaitForWindow;
 
     public int DelayMs { get; set; }
@@ -35,4 +36,37 @@ public sealed class InjectionProfile
     public List<DllEntrySetting> Dlls { get; set; } = [];
 
     public WatchConfig? Watch { get; set; }
+}
+
+/// <summary>
+///     Reads a watch trigger by name. An unrecognized value becomes <see cref="WatchTrigger.WaitForWindow"/>
+///     so one bad profile cannot discard the rest of the settings file.
+/// </summary>
+public sealed class WatchTriggerJsonConverter : JsonConverter<WatchTrigger>
+{
+    public override WatchTrigger Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            string? text = reader.GetString();
+            if (Enum.TryParse(text, ignoreCase: true, out WatchTrigger named) && Enum.IsDefined(named))
+            {
+                return named;
+            }
+
+            return WatchTrigger.WaitForWindow;
+        }
+
+        if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int number) && Enum.IsDefined(typeof(WatchTrigger), number))
+        {
+            return (WatchTrigger)number;
+        }
+
+        return WatchTrigger.WaitForWindow;
+    }
+
+    public override void Write(Utf8JsonWriter writer, WatchTrigger value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value.ToString());
+    }
 }

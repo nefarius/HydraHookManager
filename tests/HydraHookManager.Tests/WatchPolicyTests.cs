@@ -11,6 +11,7 @@ public class WatchPolicyTests
 
         Assert.True(WatchPolicy.MatchesTarget(game, @"C:\Games\game.exe"));
         Assert.True(WatchPolicy.MatchesTarget(game, @"\\?\C:\Games\game.exe"));
+        Assert.True(WatchPolicy.MatchesTarget(game, @"C:/Games/game.exe"));
         Assert.False(WatchPolicy.MatchesTarget(game, @"D:\Games\game.exe"));
         Assert.False(WatchPolicy.MatchesTarget(game, @"C:\Games\other.exe"));
     }
@@ -27,6 +28,10 @@ public class WatchPolicyTests
         Assert.False(WatchPolicy.MatchesTarget(other, "game"));
         Assert.False(WatchPolicy.MatchesTarget(other, "game.exe"));
         Assert.False(WatchPolicy.MatchesTarget(named, "  "));
+
+        ProcessInfo doubled = TestData.Process(3, "game.exe", created: 3, exePath: @"D:\bin\game.exe.exe");
+        Assert.False(WatchPolicy.MatchesTarget(doubled, "game.exe"));
+        Assert.True(WatchPolicy.MatchesTarget(doubled, "game.exe.exe"));
     }
 
     [Fact]
@@ -70,12 +75,47 @@ public class WatchPolicyTests
         quiet.WindowTitle = "Play";
         Assert.Same(quiet, WatchPolicy.EvaluateTick([quiet], window, 100));
 
+        ProcessInfo untitled = TestData.Process(3, "game.exe", created: 3, exePath: @"C:\game.exe");
+        untitled.HasWindow = true;
+        WatchSessionState captionless = Session(WatchTrigger.WaitForWindow, delayMs: 0);
+        Assert.Same(untitled, WatchPolicy.EvaluateTick([untitled], captionless, 100));
+
         ProcessInfo graphics = TestData.Process(2, "game.exe", created: 2, exePath: @"C:\game.exe");
         WatchSessionState direct3d = Session(WatchTrigger.WaitForDirect3D, delayMs: 500);
+        graphics.GraphicsApi = "DXGI";
         Assert.Null(WatchPolicy.EvaluateTick([graphics], direct3d, 1_000));
+        Assert.Null(WatchPolicy.EvaluateTick([graphics], direct3d, 1_600));
         graphics.GraphicsApi = "D3D11";
-        Assert.Null(WatchPolicy.EvaluateTick([graphics], direct3d, 1_200));
-        Assert.Same(graphics, WatchPolicy.EvaluateTick([graphics], direct3d, 1_700));
+        Assert.Null(WatchPolicy.EvaluateTick([graphics], direct3d, 1_800));
+        Assert.Same(graphics, WatchPolicy.EvaluateTick([graphics], direct3d, 2_400));
+    }
+
+    [Fact]
+    public void EvaluateTick_starts_every_ready_timer_before_it_returns_one_process()
+    {
+        ProcessInfo first = TestData.Process(1, "game.exe", window: "A", created: 1, exePath: @"C:\game.exe");
+        ProcessInfo second = TestData.Process(2, "game.exe", window: "B", created: 2, exePath: @"C:\game.exe");
+        WatchSessionState session = Session(WatchTrigger.WaitForWindow, delayMs: 1_000);
+
+        Assert.Null(WatchPolicy.EvaluateTick([first], session, 1_000));
+        Assert.Same(first, WatchPolicy.EvaluateTick([first, second], session, 2_000));
+        Assert.Equal(2_000, session.ReadySinceTicks[second.InstanceKey]);
+    }
+
+    [Fact]
+    public void A_missing_creation_time_does_not_forget_a_handled_process_that_is_still_running()
+    {
+        ProcessInfo known = TestData.Process(4, "game.exe", created: 100, exePath: @"C:\game.exe");
+        WatchSessionState session = Session(WatchTrigger.OnLaunch);
+        session.HandledInstances.Add(known.InstanceKey);
+
+        ProcessInfo unreadable = TestData.Process(4, "game.exe", omitCreationTime: true, exePath: @"C:\game.exe");
+        Assert.Null(WatchPolicy.EvaluateTick([unreadable], session, 1_000));
+        Assert.Contains(known.InstanceKey, session.HandledInstances);
+
+        Assert.Null(WatchPolicy.EvaluateTick([known], session, 2_000));
+        ProcessInfo reused = TestData.Process(4, "game.exe", window: "Play", created: 300, exePath: @"C:\game.exe");
+        Assert.Same(reused, WatchPolicy.EvaluateTick([reused], session, 3_000));
     }
 
     [Fact]

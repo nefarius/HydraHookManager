@@ -600,17 +600,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        int version = ++_armVersion;
+        _ = ++_armVersion;
         ApplyWatchFields(source);
-        if (!_hasProcessSnapshot)
-        {
-            _pendingArm = source;
-            _ = RefreshThenArmAsync(source, version);
-            return;
-        }
-
-        _pendingArm = null;
-        CompleteArm(source);
+        _pendingArm = source;
+        _ = RunRefreshAsync(userInitiated: true);
     }
 
     [RelayCommand]
@@ -877,11 +870,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
             PublishView(sameSnapshot: false);
             StartModuleScan(forceAll: userInitiated, forceKey: null);
             ConsiderAutoInject();
+            if (version == _refreshVersion)
+            {
+                TryCompletePendingArm();
+            }
 
             _ = PopulateIconsAsync(_processes, token);
         }
         catch (OperationCanceledException)
         {
+            if (version == _refreshVersion)
+            {
+                _pendingArm = null;
+            }
         }
         catch (Exception ex)
         {
@@ -889,6 +890,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
             if (version == _refreshVersion && userInitiated)
             {
                 _notifications.Show("Process list", ex.Message, NotificationSeverity.Error);
+            }
+
+            if (version == _refreshVersion)
+            {
+                FailPendingArm();
             }
         }
         finally
@@ -1671,25 +1677,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
         };
     }
 
-    private async Task RefreshThenArmAsync(WatchConfig source, int version)
+    private void TryCompletePendingArm()
     {
-        await RunRefreshAsync(userInitiated: true);
-        if (version != _armVersion || _pendingArm is null || !_hasProcessSnapshot)
+        if (_pendingArm is not WatchConfig pending || !_hasProcessSnapshot)
         {
-            if (version == _armVersion)
-            {
-                _pendingArm = null;
-                if (!_hasProcessSnapshot)
-                {
-                    _notifications.Show("Watch", "The process list could not be read.", NotificationSeverity.Warning);
-                }
-            }
-
             return;
         }
 
         _pendingArm = null;
-        CompleteArm(source);
+        CompleteArm(pending);
+    }
+
+    private void FailPendingArm()
+    {
+        _pendingArm = null;
     }
 
     private void CompleteArm(WatchConfig source)
@@ -1762,8 +1763,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 eject: false);
             if (selection.BlockingReason is not null)
             {
-                WatchStatusText = selection.BlockingReason + " This launch was skipped. Still watching.";
-                _notifications.Show("Watch", selection.BlockingReason, NotificationSeverity.Warning);
+                ReportWatch(session, selection.BlockingReason + " This launch was skipped. Still watching.", selection.BlockingReason, NotificationSeverity.Warning);
                 return;
             }
 
@@ -1776,7 +1776,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 && _processService.TryGetProcessCreationTime(process.Id, out long live)
                 && live != expected)
             {
-                WatchStatusText = $"{process.Name} exited before injection. Still watching.";
+                ReportWatch(session, $"{process.Name} exited before injection. Still watching.", null, NotificationSeverity.Warning);
                 return;
             }
 
@@ -1792,8 +1792,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             {
                 RememberInjection(process, dlls, eject: false);
                 StartModuleScan(forceAll: false, forceKey: process.InstanceKey);
-                WatchStatusText = $"Injected into {process.Name} ({process.Id}). Still watching.";
-                _notifications.Show("Watch", WatchStatusText, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
+                ReportWatch(
+                    session,
+                    $"Injected into {process.Name} ({process.Id}). Still watching.",
+                    $"Injected into {process.Name} ({process.Id}). Still watching.",
+                    NotificationSeverity.Success,
+                    TimeSpan.FromSeconds(4));
             }
             else
             {
@@ -1802,19 +1806,41 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     message += "\n\nThe target process may require administrator rights. Use \"Restart as Admin\" and try again.";
                 }
 
-                WatchStatusText = $"Injection into {process.Name} ({process.Id}) failed. Still watching.";
-                _notifications.Show("Watch", message, NotificationSeverity.Error, TimeSpan.FromSeconds(8));
+                ReportWatch(
+                    session,
+                    $"Injection into {process.Name} ({process.Id}) failed. Still watching.",
+                    message,
+                    NotificationSeverity.Error,
+                    TimeSpan.FromSeconds(8));
             }
         }
         catch (Exception ex)
         {
             _logger?.LogError(ex, "Watch auto-inject failed");
-            WatchStatusText = $"Injection into {process.Name} ({process.Id}) failed. Still watching.";
-            _notifications.Show("Watch", ex.Message, NotificationSeverity.Error, TimeSpan.FromSeconds(8));
+            ReportWatch(
+                session,
+                $"Injection into {process.Name} ({process.Id}) failed. Still watching.",
+                ex.Message,
+                NotificationSeverity.Error,
+                TimeSpan.FromSeconds(8));
         }
         finally
         {
             IsOperationRunning = false;
+        }
+    }
+
+    private void ReportWatch(WatchSessionState session, string status, string? notification, NotificationSeverity severity, TimeSpan? timeout = null)
+    {
+        if (!ReferenceEquals(_watchSession, session))
+        {
+            return;
+        }
+
+        WatchStatusText = status;
+        if (notification is not null)
+        {
+            _notifications.Show("Watch", notification, severity, timeout);
         }
     }
 

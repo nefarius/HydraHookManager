@@ -46,8 +46,8 @@ public static class WatchPolicy
         string trimmed = target.Trim();
         if (trimmed.Contains('\\') || trimmed.Contains('/'))
         {
-            string actual = ModuleInspectionPolicy.NormalizeModulePath(process.ExePath);
-            string expected = ModuleInspectionPolicy.NormalizeModulePath(trimmed);
+            string actual = NormalizeExecutablePath(process.ExePath);
+            string expected = NormalizeExecutablePath(trimmed);
             return actual.Length > 0 && string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -57,13 +57,12 @@ public static class WatchPolicy
             return false;
         }
 
-        if (string.Equals(ExecutableKey(process.Name), wanted, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(process.ExePath))
         {
-            return true;
+            return string.Equals(ExecutableKey(process.ExePath), wanted, StringComparison.OrdinalIgnoreCase);
         }
 
-        return !string.IsNullOrWhiteSpace(process.ExePath)
-               && string.Equals(ExecutableKey(process.ExePath), wanted, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(ExecutableKey(process.Name), wanted, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -115,17 +114,11 @@ public static class WatchPolicy
     /// </summary>
     public static ProcessInfo? EvaluateTick(IReadOnlyList<ProcessInfo> processes, WatchSessionState session, long nowTicks)
     {
-        HashSet<ProcessInstanceKey> live = [];
-        foreach (ProcessInfo process in processes)
-        {
-            live.Add(process.InstanceKey);
-        }
-
-        session.HandledInstances.RemoveWhere(key => !live.Contains(key));
+        session.HandledInstances.RemoveWhere(key => !IsStillRunning(key, processes));
         List<ProcessInstanceKey> staleReady = [];
         foreach (ProcessInstanceKey key in session.ReadySinceTicks.Keys)
         {
-            if (!live.Contains(key))
+            if (!IsStillRunning(key, processes))
             {
                 staleReady.Add(key);
             }
@@ -136,6 +129,8 @@ public static class WatchPolicy
             session.ReadySinceTicks.Remove(key);
         }
 
+        ProcessInfo? ready = null;
+        int delay = ClampDelayMs(session.Config.DelayMs);
         foreach (ProcessInfo process in processes)
         {
             if (process.CreationTime is null || !MatchesTarget(process, session.Config.Target))
@@ -161,15 +156,31 @@ public static class WatchPolicy
                 session.ReadySinceTicks[key] = since;
             }
 
-            if (nowTicks - since < ClampDelayMs(session.Config.DelayMs))
+            if (ready is null && nowTicks - since >= delay)
+            {
+                ready = process;
+            }
+        }
+
+        return ready;
+    }
+
+    private static bool IsStillRunning(ProcessInstanceKey key, IReadOnlyList<ProcessInfo> processes)
+    {
+        foreach (ProcessInfo process in processes)
+        {
+            if (process.Id != key.Id)
             {
                 continue;
             }
 
-            return process;
+            if (process.CreationTime is null || process.CreationTime == key.CreationTime)
+            {
+                return true;
+            }
         }
 
-        return null;
+        return false;
     }
 
     private static bool TriggerIsMet(ProcessInfo process, WatchTrigger trigger)
@@ -177,9 +188,28 @@ public static class WatchPolicy
         return trigger switch
         {
             WatchTrigger.OnLaunch => true,
-            WatchTrigger.WaitForDirect3D => process.HasDirect3D,
+            WatchTrigger.WaitForDirect3D => HasDirect3DRuntime(process),
             _ => process.HasWindow
         };
+    }
+
+    private static bool HasDirect3DRuntime(ProcessInfo process)
+    {
+        string? api = process.GraphicsApi;
+        if (string.IsNullOrEmpty(api))
+        {
+            return false;
+        }
+
+        return api.Contains("D3D12", StringComparison.Ordinal)
+               || api.Contains("D3D11", StringComparison.Ordinal)
+               || api.Contains("D3D10", StringComparison.Ordinal)
+               || api.Contains("D3D9", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeExecutablePath(string? path)
+    {
+        return ModuleInspectionPolicy.NormalizeModulePath(path).Replace('/', '\\');
     }
 
     private static string ExecutableKey(string value)

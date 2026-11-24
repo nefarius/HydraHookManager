@@ -1167,12 +1167,15 @@ public class MainWindowViewModelTests
         MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
         viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
         viewModel.AddDlls([@"C:\a.dll"]);
+        _processes.Processes.Add(TestData.Process(8, "launchme.exe", window: "Old", created: 800, exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[8] = 800;
         viewModel.ArmWatch(new WatchConfig
         {
             Target = @"C:\Games\launchme.exe",
             Trigger = WatchTrigger.OnLaunch,
             DelayMs = 0
         });
+        await viewModel.RefreshAsync();
 
         Assert.True(viewModel.IsWatchArmed);
         Assert.Empty(_injector.Calls);
@@ -1198,6 +1201,36 @@ public class MainWindowViewModelTests
 
         Assert.Equal([40, 41], _injector.Calls.Select(call => call.ProcessId));
         Assert.True(viewModel.IsWatchArmed);
+    }
+
+    [Fact]
+    public async Task A_finished_auto_inject_does_not_overwrite_a_newer_watch()
+    {
+        TaskCompletionSource<InjectResult> gate = new();
+        _injector.InjectGate = gate.Task;
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\launchme.exe", Trigger = WatchTrigger.OnLaunch });
+        _processes.Processes.Add(TestData.Process(40, "launchme.exe", window: "Play", created: 9000, exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[40] = 9000;
+        await viewModel.RefreshAsync();
+
+        Assert.True(viewModel.IsOperationRunning);
+        viewModel.DisarmWatch();
+        _processes.Processes.RemoveAll(process => process.Id == 40);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\other.exe", Trigger = WatchTrigger.OnLaunch });
+        string armedStatus = viewModel.WatchStatusText;
+
+        gate.SetResult(new InjectResult(true, "injected", ""));
+        for (int attempt = 0; viewModel.IsOperationRunning && attempt < 50; attempt++)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.False(viewModel.IsOperationRunning);
+        Assert.Equal(armedStatus, viewModel.WatchStatusText);
+        Assert.Contains("other.exe", viewModel.WatchStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(_ledger.Current.Entries, entry => entry.ProcessId == 40);
     }
 
     [Fact]

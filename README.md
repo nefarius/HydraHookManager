@@ -55,7 +55,7 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 3. Verify the archive against `checksums.txt` (SHA-256).
 4. Extract to a writable folder and run `HydraHookManager.exe`.
 5. Select a process, add DLLs, click **Inject** (or **Eject** to unload them).
-6. Save a named profile to keep that DLL list. **Watch...** arms auto-inject for new launches of one executable. Use **Stop** on the banner to disarm it.
+6. Save a named profile to keep that DLL list. **Watch...** opens setup. Check at least one DLL, choose the executable and trigger, then click **Arm Watch**. Use **Stop** on the banner to disarm it.
 
 Data locations (`%LocalAppData%\HydraHookManager`):
 
