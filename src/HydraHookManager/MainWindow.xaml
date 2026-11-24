@@ -10,7 +10,7 @@
         Title="HydraHook Manager"
         Height="640"
         Width="1040"
-        MinHeight="400"
+        MinHeight="520"
         MinWidth="860"
         d:DataContext="{d:DesignInstance Type=vm:MainWindowViewModel}"
         mc:Ignorable="d">
@@ -78,13 +78,14 @@
             </Style.Triggers>
         </Style>
     </ui:FluentWindow.Resources>
-    <Grid Margin="16">
+    <Grid x:Name="RootLayout" Margin="16" SizeChanged="RootLayout_SizeChanged">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="180" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
+            <RowDefinition x:Name="HeaderRow" Height="Auto" />
+            <RowDefinition Height="*" MinHeight="160" />
+            <RowDefinition x:Name="SplitterRow" Height="Auto" />
+            <RowDefinition x:Name="DllPaneRow" Height="180" MinHeight="130" />
+            <RowDefinition x:Name="ActionRow" Height="Auto" />
+            <RowDefinition x:Name="SnackbarRow" Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Header -->
@@ -358,23 +359,106 @@
             </Grid>
         </ui:Card>
 
-        <!-- DLL injection section: fixed height, below process list -->
-        <ui:Card Grid.Row="2" Padding="12" VerticalAlignment="Top">
+        <GridSplitter Grid.Row="2"
+                      Height="6"
+                      Margin="0,0,0,8"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Center"
+                      ResizeDirection="Rows"
+                      ResizeBehavior="PreviousAndNext"
+                      Background="Transparent"
+                      DragCompleted="DllPaneSplitter_DragCompleted"
+                      KeyUp="DllPaneSplitter_KeyUp" />
+
+        <!-- DLL injection section: height follows the splitter and is saved with the window. -->
+        <ui:Card Grid.Row="3" Padding="12" VerticalAlignment="Stretch">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
-                <TextBlock Grid.Row="0" Text="DLLs to inject" FontWeight="SemiBold" Margin="0,0,0,8" />
+                <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="True">
+                    <TextBlock DockPanel.Dock="Left" Text="DLLs to inject" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding DllSelectionSummary}"
+                               Margin="12,0,0,0"
+                               Opacity="0.7"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center" />
+                </DockPanel>
                 <ListBox x:Name="DllListBox"
                          Grid.Row="1"
                          Margin="0,0,0,8"
                          AllowDrop="True"
-                         ItemsSource="{Binding DllPaths}"
+                         ItemsSource="{Binding DllItems}"
                          SelectedItem="{Binding SelectedDll, Mode=TwoWay}"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          DragOver="DllListBox_DragOver"
-                         Drop="DllListBox_Drop" />
+                         Drop="DllListBox_Drop">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border x:Name="DllRow" ToolTip="{Binding StatusTooltip}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <CheckBox Grid.Column="0"
+                                              VerticalAlignment="Center"
+                                              IsChecked="{Binding IsChecked, Mode=TwoWay}" />
+                                    <StackPanel Grid.Column="1" Margin="8,0,8,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Path}"
+                                                   Opacity="0.65"
+                                                   FontSize="11"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Border x:Name="ArchBadge"
+                                                Margin="4,0,0,0"
+                                                Padding="4,0"
+                                                CornerRadius="3"
+                                                VerticalAlignment="Center"
+                                                Background="#22000000"
+                                                Visibility="{Binding ShowArchitecture, Converter={StaticResource BooleanToVisibility}}">
+                                            <TextBlock FontSize="11" Text="{Binding ArchitectureLabel}" />
+                                        </Border>
+                                        <Border Margin="4,0,0,0"
+                                                Padding="4,0"
+                                                CornerRadius="3"
+                                                VerticalAlignment="Center"
+                                                Background="#44D97706"
+                                                Visibility="{Binding ShowFileStatus, Converter={StaticResource BooleanToVisibility}}">
+                                            <TextBlock FontSize="11" Text="{Binding FileStatusLabel}" />
+                                        </Border>
+                                        <Border Margin="4,0,0,0"
+                                                Padding="4,0"
+                                                CornerRadius="3"
+                                                VerticalAlignment="Center"
+                                                Background="#443CB06B"
+                                                ToolTip="Loaded in the selected process"
+                                                Visibility="{Binding IsLoadedInSelected, Converter={StaticResource BooleanToVisibility}}">
+                                            <TextBlock FontSize="11" Text="Loaded" />
+                                        </Border>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                            <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding IsArchitectureMismatch}" Value="True">
+                                    <Setter TargetName="ArchBadge" Property="Background" Value="#44D97706" />
+                                    <Setter TargetName="DllRow" Property="Opacity" Value="0.55" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsChecked}" Value="False">
+                                    <Setter TargetName="DllRow" Property="Opacity" Value="0.55" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding ShowFileStatus}" Value="True">
+                                    <Setter TargetName="DllRow" Property="Opacity" Value="0.55" />
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
                 <StackPanel Grid.Row="2" Orientation="Horizontal">
                     <ui:Button Content="Add DLL"
                                Icon="{ui:SymbolIcon Add24}"
@@ -388,7 +472,7 @@
         </ui:Card>
 
         <!-- Bottom: actions -->
-        <Grid Grid.Row="3" Margin="0,16,0,0">
+        <Grid Grid.Row="4" Margin="0,16,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
@@ -426,9 +510,9 @@
         </Grid>
 
         <!-- Snackbar for injection feedback -->
-        <ui:SnackbarPresenter x:Name="SnackbarPresenter" Grid.Row="4" />
+        <ui:SnackbarPresenter x:Name="SnackbarPresenter" Grid.Row="5" SizeChanged="SnackbarPresenter_SizeChanged" />
 
         <!-- Host for content dialogs (update prompt) -->
-        <ui:ContentDialogHost x:Name="RootContentDialog" Grid.RowSpan="5" />
+        <ui:ContentDialogHost x:Name="RootContentDialog" Grid.RowSpan="6" />
     </Grid>
 </ui:FluentWindow>

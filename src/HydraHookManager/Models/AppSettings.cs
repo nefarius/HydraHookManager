@@ -10,6 +10,13 @@ public sealed class AppSettings
 {
     public List<string> DllPaths { get; set; } = [];
 
+    /// <summary>
+    ///     Checked DLL rows. Null means an older settings file that only has <see cref="DllPaths"/>.
+    /// </summary>
+    public List<DllEntrySetting>? Dlls { get; set; }
+
+    public double? DllPaneHeight { get; set; }
+
     public string SortKey { get; set; } = "Name";
 
     public bool SortDescending { get; set; }

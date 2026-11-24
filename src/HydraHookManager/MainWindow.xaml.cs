@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -30,6 +31,8 @@ public partial class MainWindow : FluentWindow
     private readonly IContentDialogService _contentDialogService;
     private readonly DispatcherTimer _autoRefreshTimer;
     private WindowState _lastWindowState = WindowState.Normal;
+    private double _requestedDllPaneHeight = WindowPlacementPolicy.DefaultDllPaneHeight;
+    private double _appliedDllPaneHeight = WindowPlacementPolicy.DefaultDllPaneHeight;
 
     public MainWindow(
         MainWindowViewModel viewModel,
@@ -81,11 +84,16 @@ public partial class MainWindow : FluentWindow
             ? new Rect(Left, Top, Width, Height)
             : RestoreBounds;
         WindowPlacementPolicy.Write(_viewModel.Settings, WindowState, bounds);
+        _viewModel.Settings.DllPaneHeight = WindowPlacementPolicy.ClampDllPaneHeight(_requestedDllPaneHeight);
         _viewModel.SaveSettings();
     }
 
     private void ApplySavedPlacement()
     {
+        _requestedDllPaneHeight = WindowPlacementPolicy.ClampDllPaneHeight(_viewModel.Settings.DllPaneHeight);
+        _appliedDllPaneHeight = _requestedDllPaneHeight;
+        DllPaneRow.Height = new GridLength(_requestedDllPaneHeight);
+        UpdateDllPaneLimit();
         if (!WindowPlacementPolicy.TryRead(_viewModel.Settings, out WindowPlacementSnapshot saved))
         {
             return;
@@ -106,6 +114,61 @@ public partial class MainWindow : FluentWindow
         if (placement.State == WindowState.Maximized)
         {
             WindowState = WindowState.Maximized;
+        }
+    }
+
+    private void RootLayout_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.HeightChanged)
+        {
+            UpdateDllPaneLimit();
+        }
+    }
+
+    private void SnackbarPresenter_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.HeightChanged)
+        {
+            UpdateDllPaneLimit();
+        }
+    }
+
+    private void DllPaneSplitter_DragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        UpdateDllPaneLimit();
+    }
+
+    private void DllPaneSplitter_KeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key is Key.Up or Key.Down)
+        {
+            UpdateDllPaneLimit();
+        }
+    }
+
+    private void UpdateDllPaneLimit()
+    {
+        if (RootLayout.ActualHeight <= 0)
+        {
+            return;
+        }
+
+        double chrome = HeaderRow.ActualHeight + SplitterRow.ActualHeight + ActionRow.ActualHeight + SnackbarRow.ActualHeight;
+        double available = RootLayout.ActualHeight - chrome - WindowPlacementPolicy.ProcessListMinHeight;
+        double shown = DllPaneRow.Height.IsAbsolute ? DllPaneRow.Height.Value : _requestedDllPaneHeight;
+        (double requested, double display) = WindowPlacementPolicy.ResolveDllPaneSize(
+            _requestedDllPaneHeight,
+            shown,
+            _appliedDllPaneHeight,
+            available);
+        _requestedDllPaneHeight = requested;
+        _appliedDllPaneHeight = display;
+        double floor = Math.Min(WindowPlacementPolicy.MinDllPaneHeight, display);
+        DllPaneRow.MinHeight = floor;
+        DllPaneRow.MaxHeight = Math.Max(floor, Math.Min(WindowPlacementPolicy.MaxDllPaneHeight, Math.Max(0, available)));
+        if (Math.Abs(shown - display) > 0.5)
+        {
+            DllPaneRow.Height = new GridLength(display);
         }
     }
 

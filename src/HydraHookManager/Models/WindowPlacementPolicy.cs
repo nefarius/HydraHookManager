@@ -22,6 +22,52 @@ public static class WindowPlacementPolicy
     public const double DefaultHeight = 600;
     public const double MinWidth = 700;
     public const double MinHeight = 400;
+    public const double DefaultDllPaneHeight = 180;
+    public const double MinDllPaneHeight = 130;
+    public const double MaxDllPaneHeight = 500;
+    public const double ProcessListMinHeight = 160;
+
+    public static double ClampDllPaneHeight(double? height)
+    {
+        return ClampDllPaneHeight(height, double.PositiveInfinity);
+    }
+
+    /// <summary>
+    ///     Keeps the pane inside its fixed limits and inside the height left after the process list and the other rows.
+    /// </summary>
+    public static double ClampDllPaneHeight(double? height, double availableHeight)
+    {
+        double cap = MaxDllPaneHeight;
+        if (double.IsFinite(availableHeight))
+        {
+            cap = Math.Min(MaxDllPaneHeight, Math.Max(0, availableHeight));
+        }
+
+        double floor = Math.Min(MinDllPaneHeight, cap);
+        double upper = Math.Max(floor, cap);
+        double value = height is double requested && double.IsFinite(requested)
+            ? requested
+            : DefaultDllPaneHeight;
+        return Math.Clamp(value, floor, upper);
+    }
+
+    /// <summary>
+    ///     A user drag updates the requested height. A temporary cap only changes what is shown.
+    /// </summary>
+    public static (double Requested, double Display) ResolveDllPaneSize(
+        double requested,
+        double shown,
+        double lastApplied,
+        double available)
+    {
+        double nextRequested = requested;
+        if (double.IsFinite(shown) && Math.Abs(shown - lastApplied) > 0.5)
+        {
+            nextRequested = ClampDllPaneHeight(shown);
+        }
+
+        return (nextRequested, ClampDllPaneHeight(nextRequested, available));
+    }
 
     private const double TitleBarProbeX = 40;
     private const double TitleBarProbeY = 16;

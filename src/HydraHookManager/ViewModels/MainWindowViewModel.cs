@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
@@ -21,6 +22,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly INotificationService _notifications;
     private readonly IModuleScannerService _moduleScanner;
     private readonly IInjectionStateService _injectionState;
+    private readonly IDllInspectorService _dllInspector;
     private readonly ILogger<MainWindowViewModel>? _logger;
     private readonly Dictionary<ProcessInstanceKey, ProcessInfo> _live = [];
     private readonly Dictionary<ProcessInstanceKey, ModuleScanResult> _scans = [];
@@ -50,7 +52,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private ProcessInfo? _selectedProcess;
 
     [ObservableProperty]
-    private string? _selectedDll;
+    private DllItem? _selectedDll;
+
+    [ObservableProperty]
+    private string _dllSelectionSummary = "Add DLLs to inject.";
 
     [ObservableProperty]
     private bool _isRefreshing;
@@ -97,6 +102,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         INotificationService notifications,
         IModuleScannerService moduleScanner,
         IInjectionStateService injectionState,
+        IDllInspectorService dllInspector,
         ILogger<MainWindowViewModel>? logger = null)
     {
         _processService = processService;
@@ -107,6 +113,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _notifications = notifications;
         _moduleScanner = moduleScanner;
         _injectionState = injectionState;
+        _dllInspector = dllInspector;
         _logger = logger;
 
         AppSettings settings = settingsService.Current;
@@ -117,18 +124,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _showDirect3DOnly = settings.ShowDirect3DOnly;
         _showInjectedOnly = settings.ShowInjectedOnly;
         _isAutoRefreshEnabled = settings.IsAutoRefreshEnabled;
-        foreach (string path in settings.DllPaths)
+        foreach (DllEntrySetting entry in ConfiguredDlls(settings))
         {
-            if (!string.IsNullOrWhiteSpace(path) && !Contains(path))
+            if (!string.IsNullOrWhiteSpace(entry.Path) && !Contains(entry.Path))
             {
-                DllPaths.Add(path);
+                AddDllItem(entry.Path, entry.IsChecked);
             }
         }
+
+        UpdateDllSelectionSummary();
     }
 
     public ObservableCollection<ProcessInfo> VisibleProcesses { get; } = [];
 
-    public ObservableCollection<string> DllPaths { get; } = [];
+    public ObservableCollection<DllItem> DllItems { get; } = [];
 
     public AppSettings Settings => _settingsService.Current;
 
@@ -163,6 +172,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _selectedExePath = value?.ExePath;
         _relaunchExePath = null;
         _relaunchCreationTime = null;
+        RefreshDllSelectionState();
+        UpdateDllSelectionSummary();
         if (value is not null)
         {
             StartModuleScan(forceAll: false, forceKey: value.InstanceKey);
@@ -218,7 +229,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public void SaveSettings()
     {
         AppSettings settings = _settingsService.Current;
-        settings.DllPaths = [.. DllPaths];
+        settings.Dlls = DllItems.Select(item => new DllEntrySetting { Path = item.Path, IsChecked = item.IsChecked }).ToList();
+        settings.DllPaths = settings.Dlls.Select(entry => entry.Path).ToList();
         settings.SortKey = SortKey;
         settings.SortDescending = SortDescending;
         settings.IsTreeView = IsTreeView;
@@ -357,7 +369,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 continue;
             }
 
-            DllPaths.Add(path);
+            AddDllItem(path, isChecked: true);
             added++;
         }
 
@@ -365,6 +377,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             SaveSettings();
             ApplyLedgerAndMarks();
+            RefreshDllSelectionState();
+            UpdateDllSelectionSummary();
             if (ShowInjectedOnly)
             {
                 PublishView(sameSnapshot: true);
@@ -377,11 +391,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     [RelayCommand]
     public void RemoveSelectedDll()
     {
-        if (SelectedDll is { } selected && DllPaths.Remove(selected))
+        if (SelectedDll is { } selected && DllItems.Remove(selected))
         {
+            selected.PropertyChanged -= OnDllItemPropertyChanged;
             SelectedDll = null;
             SaveSettings();
             ApplyLedgerAndMarks();
+            RefreshDllSelectionState();
+            UpdateDllSelectionSummary();
             if (ShowInjectedOnly)
             {
                 PublishView(sameSnapshot: true);
@@ -614,6 +631,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Reconcile(processes);
             UpdateTrackedSelection();
             _hasProcessSnapshot = true;
+            if (userInitiated)
+            {
+                RefreshDllInspections();
+            }
+
             ApplyLedgerAndMarks();
             PublishView(sameSnapshot: false);
             StartModuleScan(forceAll: userInitiated, forceKey: null);
@@ -655,16 +677,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        if (DllPaths.Count == 0)
-        {
-            _notifications.Show("Add DLLs", $"Please add at least one DLL to {(eject ? "eject" : "inject")}.", NotificationSeverity.Warning);
-            return;
-        }
-
         // Guard against PID reuse between the last refresh and this click.
         // Unreadable creation times (e.g. protected processes) are allowed through so the injector can report the real error.
         if (RejectStaleSelection(selected))
         {
+            return;
+        }
+
+        RefreshDllInspections();
+        DllOperationSelection selection = DllSelectionPolicy.ResolveForOperation(
+            DllItems,
+            DllSelectionPolicy.ParseProcessArchitecture(selected.Architecture),
+            eject);
+        if (selection.BlockingReason is not null)
+        {
+            string title = DllItems.Count == 0 ? "Add DLLs" : "DLLs";
+            _notifications.Show(title, selection.BlockingReason, NotificationSeverity.Warning);
             return;
         }
 
@@ -673,12 +701,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         try
         {
             bool is64Bit = ProcessListPolicy.Is64Bit(selected);
-            string[] dlls = [.. DllPaths];
+            string[] dlls = [.. selection.Paths];
             InjectResult result = eject
                 ? await _injectorService.EjectAsync(selected.Id, is64Bit, dlls)
                 : await _injectorService.InjectAsync(selected.Id, is64Bit, dlls);
 
             string message = BuildMessage(result);
+            if (selection.SkippedCount > 0)
+            {
+                message += Environment.NewLine + Environment.NewLine + selection.SkippedNote();
+            }
+
             if (result.Success)
             {
                 RememberInjection(selected, dlls, eject);
@@ -721,7 +754,95 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private bool Contains(string path)
     {
-        return DllPaths.Any(existing => string.Equals(existing, path, StringComparison.OrdinalIgnoreCase));
+        return DllItems.Any(existing => string.Equals(existing.Path, path, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static IReadOnlyList<DllEntrySetting> ConfiguredDlls(AppSettings settings)
+    {
+        if (settings.Dlls is not null)
+        {
+            return settings.Dlls;
+        }
+
+        return settings.DllPaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => new DllEntrySetting { Path = path, IsChecked = true })
+            .ToList();
+    }
+
+    private void AddDllItem(string path, bool isChecked)
+    {
+        DllItem item = new(path, isChecked);
+        ApplyInspection(item);
+        item.PropertyChanged += OnDllItemPropertyChanged;
+        DllItems.Add(item);
+    }
+
+    private void OnDllItemPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(DllItem.IsChecked))
+        {
+            return;
+        }
+
+        SaveSettings();
+        UpdateDllSelectionSummary();
+    }
+
+    private void RefreshDllInspections()
+    {
+        foreach (DllItem item in DllItems)
+        {
+            ApplyInspection(item);
+        }
+
+        RefreshDllSelectionState();
+        UpdateDllSelectionSummary();
+    }
+
+    private void ApplyInspection(DllItem item)
+    {
+        DllInspectionResult result = _dllInspector.Inspect(item.Path);
+        item.FileStatus = result.Status;
+        item.Architecture = result.Architecture;
+    }
+
+    private void RefreshDllSelectionState()
+    {
+        IReadOnlyList<LoadedModuleInfo>? modules = null;
+        if (SelectedProcess is ProcessInfo selected
+            && _scans.TryGetValue(selected.InstanceKey, out ModuleScanResult? scan)
+            && scan.AccessState == ProcessAccessState.Accessible)
+        {
+            modules = scan.Modules;
+        }
+
+        DllSelectionPolicy.RefreshSelectionState(DllItems, SelectedProcess, modules);
+    }
+
+    private void UpdateDllSelectionSummary()
+    {
+        if (DllItems.Count == 0)
+        {
+            DllSelectionSummary = "Add DLLs to inject.";
+            return;
+        }
+
+        int checkedCount = DllItems.Count(item => item.IsChecked);
+        if (SelectedProcess is not ProcessInfo selected)
+        {
+            DllSelectionSummary = $"{checkedCount} checked.";
+            return;
+        }
+
+        DllOperationSelection selection = DllSelectionPolicy.ResolveForOperation(
+            DllItems,
+            DllSelectionPolicy.ParseProcessArchitecture(selected.Architecture),
+            eject: false);
+        string target = DllSelectionPolicy.ParseProcessArchitecture(selected.Architecture) is null
+            ? "the selected process"
+            : $"this {selected.Architecture} process";
+        DllSelectionSummary = $"{selection.Paths.Count} of {checkedCount} checked match {target}.";
     }
 
     private void Reconcile(IReadOnlyList<ProcessInfo> snapshot)
@@ -853,6 +974,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             _restoringSelection = false;
         }
+
+        RefreshDllSelectionState();
+        UpdateDllSelectionSummary();
     }
 
     private void SyncVisible(List<ProcessViewRow> rows)
@@ -1137,7 +1261,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 _injectionState.Current.Entries,
                 _processes,
                 _scans,
-                [.. DllPaths],
+                DllItems.Select(item => item.Path).ToList(),
                 _marks);
         }
 
@@ -1189,6 +1313,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _scans.Remove(key);
             _lastScanTicks.Remove(key);
         }
+
+        RefreshDllSelectionState();
     }
 
     private async Task PopulateIconsAsync(IReadOnlyList<ProcessInfo> processes, CancellationToken cancellationToken)
