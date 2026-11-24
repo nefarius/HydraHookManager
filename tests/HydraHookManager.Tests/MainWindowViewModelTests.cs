@@ -1234,6 +1234,54 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Replacing_a_watch_does_not_inject_the_previous_target()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\launchme.exe", Trigger = WatchTrigger.OnLaunch });
+
+        _processes.Processes.Add(TestData.Process(40, "launchme.exe", window: "Play", created: 9000, exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[40] = 9000;
+        _processes.Processes.Add(TestData.Process(41, "other.exe", window: "Old", created: 9100, exePath: @"C:\Games\other.exe"));
+        _processes.LiveCreationTimes[41] = 9100;
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\other.exe", Trigger = WatchTrigger.OnLaunch });
+
+        Assert.True(viewModel.IsWatchArmed);
+        Assert.Contains("other.exe", viewModel.WatchStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(_injector.Calls);
+
+        _processes.Processes.Add(TestData.Process(42, "other.exe", window: "New", created: 9200, exePath: @"C:\Games\other.exe"));
+        _processes.LiveCreationTimes[42] = 9200;
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(42, Assert.Single(_injector.Calls).ProcessId);
+    }
+
+    [Fact]
+    public async Task A_failed_replacement_refresh_does_not_leave_the_old_watch_armed()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\launchme.exe", Trigger = WatchTrigger.OnLaunch });
+        Assert.True(viewModel.IsWatchArmed);
+
+        _processes.Failure = new InvalidOperationException("unavailable");
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\other.exe", Trigger = WatchTrigger.OnLaunch });
+
+        Assert.False(viewModel.IsWatchArmed);
+        Assert.Equal(@"C:\Games\other.exe", viewModel.WatchTarget);
+        Assert.Empty(_injector.Calls);
+
+        _processes.Failure = null;
+        _processes.Processes.Add(TestData.Process(40, "launchme.exe", window: "Play", created: 9000, exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[40] = 9000;
+        await viewModel.RefreshAsync();
+
+        Assert.False(viewModel.IsWatchArmed);
+        Assert.Empty(_injector.Calls);
+    }
+
+    [Fact]
     public async Task Disarming_watch_stops_auto_inject()
     {
         MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();

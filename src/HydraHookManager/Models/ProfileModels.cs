@@ -62,6 +62,11 @@ public sealed class WatchTriggerJsonConverter : JsonConverter<WatchTrigger>
             return (WatchTrigger)number;
         }
 
+        if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+        {
+            reader.Skip();
+        }
+
         return WatchTrigger.WaitForWindow;
     }
 

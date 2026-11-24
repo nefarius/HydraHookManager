@@ -163,17 +163,21 @@ public sealed class JsonSettingsServiceTests : IDisposable
         Assert.DoesNotContain("IsWatchArmed", File.ReadAllText(SettingsPath), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void An_unknown_watch_trigger_falls_back_without_discarding_the_file()
+    [Theory]
+    [InlineData("\"FutureTrigger\"")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    public void An_unknown_watch_trigger_falls_back_without_discarding_the_file(string triggerJson)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-        File.WriteAllText(SettingsPath, """
+        string json = """
             {
               "DllPaths":["C:\\kept.dll"],
-              "Profiles":[{"Name":"Alpha","Dlls":[{"Path":"C:\\a.dll","IsChecked":true}],"Watch":{"Target":"game.exe","Trigger":"FutureTrigger","DelayMs":5}}],
+              "Profiles":[{"Name":"Alpha","Dlls":[{"Path":"C:\\a.dll","IsChecked":true}],"Watch":{"Target":"game.exe","Trigger":__TRIGGER__,"DelayMs":5}}],
               "ActiveProfileName":"Alpha"
             }
-            """);
+            """.Replace("__TRIGGER__", triggerJson, StringComparison.Ordinal);
+        File.WriteAllText(SettingsPath, json);
 
         AppSettings loaded = new JsonSettingsService(SettingsPath).Current;
 

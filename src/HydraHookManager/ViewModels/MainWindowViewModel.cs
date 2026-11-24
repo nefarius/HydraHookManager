@@ -600,7 +600,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return;
         }
 
-        _ = ++_armVersion;
+        DisarmWatch();
         ApplyWatchFields(source);
         _pendingArm = source;
         _ = RunRefreshAsync(userInitiated: true);
