@@ -169,6 +169,56 @@ public static class ModuleInspectionPolicy
         return rows;
     }
 
+    /// <summary>
+    ///     An accessible scan that no longer lists these DLLs means eject removed them.
+    ///     File names count too, because a module path can be a device path.
+    /// </summary>
+    public static bool ReportsDllsUnloaded(ModuleScanResult scan, IReadOnlyList<string> dllPaths)
+    {
+        if (scan.AccessState != ProcessAccessState.Accessible)
+        {
+            return false;
+        }
+
+        HashSet<string> loadedPaths = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> loadedNames = new(StringComparer.OrdinalIgnoreCase);
+        foreach (LoadedModuleInfo module in scan.Modules)
+        {
+            string path = NormalizeModulePath(module.FullPath);
+            if (path.Length > 0)
+            {
+                loadedPaths.Add(path);
+            }
+
+            string name = Path.GetFileName(path);
+            if (name.Length == 0)
+            {
+                name = module.Name;
+            }
+
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                loadedNames.Add(name);
+            }
+        }
+
+        foreach (string dllPath in dllPaths)
+        {
+            string path = NormalizeModulePath(dllPath);
+            if (path.Length == 0)
+            {
+                continue;
+            }
+
+            if (loadedPaths.Contains(path) || loadedNames.Contains(Path.GetFileName(path)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public static string NormalizeModulePath(string? path)
     {
         if (string.IsNullOrWhiteSpace(path))

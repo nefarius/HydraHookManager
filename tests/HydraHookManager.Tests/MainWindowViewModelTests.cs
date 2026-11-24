@@ -1048,6 +1048,64 @@ public class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task Eject_clears_the_injected_mark_when_the_injector_fails_but_the_dll_is_gone()
+    {
+        _processes.Processes = [TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\game.exe")];
+        _processes.LiveCreationTimes[10] = 1000;
+        _ledger.Current.Entries.Add(new InjectionLedgerEntry
+        {
+            ProcessId = 10,
+            CreationTime = 1000,
+            ExePath = @"C:\game.exe",
+            DllPaths = [@"C:\a.dll"]
+        });
+        _modules.ResultsByProcess[10] = new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("a.dll", @"C:\a.dll", 0, 10)],
+            null);
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        _modules.ResultsByProcess[10] = new ModuleScanResult(ProcessAccessState.Accessible, [], null);
+        _injector.Result = new InjectResult(false, string.Empty, "Call to FreeLibrary in remote process failed.");
+
+        await viewModel.EjectAsync();
+
+        Assert.Empty(_ledger.Current.Entries);
+        Assert.Equal(InjectionBadgeState.None, viewModel.SelectedProcess?.InjectionState);
+        Assert.Contains(_notifications.Messages, message => message.Title == "Ejection successful");
+    }
+
+    [Fact]
+    public async Task Eject_keeps_the_injected_mark_when_the_dll_is_still_loaded()
+    {
+        _processes.Processes = [TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\game.exe")];
+        _processes.LiveCreationTimes[10] = 1000;
+        _ledger.Current.Entries.Add(new InjectionLedgerEntry
+        {
+            ProcessId = 10,
+            CreationTime = 1000,
+            ExePath = @"C:\game.exe",
+            DllPaths = [@"C:\a.dll"]
+        });
+        _modules.ResultsByProcess[10] = new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("a.dll", @"C:\a.dll", 0, 10)],
+            null);
+        MainWindowViewModel viewModel = CreateViewModel();
+        await viewModel.RefreshAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        _injector.Result = new InjectResult(false, string.Empty, "Call to FreeLibrary in remote process failed.");
+
+        await viewModel.EjectAsync();
+
+        Assert.Equal([@"C:\a.dll"], _ledger.Current.Entries.Single().DllPaths);
+        Assert.Contains(_notifications.Messages, message => message.Title == "Ejection failed");
+    }
+
+    [Fact]
     public async Task Context_commands_use_the_selected_process()
     {
         _processes.Processes = [TestData.Process(10, "game", window: "Game", created: 1000, exePath: @"C:\game.exe")];
