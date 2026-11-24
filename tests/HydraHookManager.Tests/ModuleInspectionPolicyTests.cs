@@ -149,6 +149,23 @@ public class ModuleInspectionPolicyTests
     }
 
     [Fact]
+    public void DllsConfirmedUnloaded_accepts_a_removed_dll_when_another_directory_has_the_same_name()
+    {
+        ModuleScanResult scan = new(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("hook.dll", @"C:\other\hook.dll", 0, 10)],
+            null);
+
+        Assert.Equal([@"C:\mods\hook.dll"], ModuleInspectionPolicy.DllsConfirmedUnloaded(scan, [@"C:\mods\hook.dll"]));
+
+        ModuleScanResult devicePath = new(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("hook.dll", @"\Device\HarddiskVolume3\hook.dll", 0, 10)],
+            null);
+        Assert.Empty(ModuleInspectionPolicy.DllsConfirmedUnloaded(devicePath, [@"C:\mods\hook.dll"]));
+    }
+
+    [Fact]
     public void OrderModulesForInspector_pins_injected_then_graphics_and_marks_user_dlls_ejectable()
     {
         LoadedModuleInfo injected = Module(@"D:\mods\hook.dll");

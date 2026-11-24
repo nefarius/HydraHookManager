@@ -176,7 +176,7 @@ public static class ModuleInspectionPolicy
 
     /// <summary>
     ///     An accessible scan that no longer lists these DLLs means eject removed them.
-    ///     File names count too, because a module path can be a device path.
+    ///     A device path can match by file name. Two different full paths do not.
     ///     A mapped HydraHook DLL whose engine stopped because of <c>FreeLibrary</c> counts as unloaded.
     /// </summary>
     public static bool ReportsDllsUnloaded(ModuleScanResult scan, IReadOnlyList<string> dllPaths)
@@ -202,6 +202,7 @@ public static class ModuleInspectionPolicy
 
         HashSet<string> loadedPaths = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> loadedNames = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> unidentifiedNames = new(StringComparer.OrdinalIgnoreCase);
         foreach (LoadedModuleInfo module in scan.Modules)
         {
             if (scan.EngineStates is not null
@@ -223,9 +224,15 @@ public static class ModuleInspectionPolicy
                 name = module.Name;
             }
 
-            if (!string.IsNullOrWhiteSpace(name))
+            if (string.IsNullOrWhiteSpace(name))
             {
-                loadedNames.Add(name);
+                continue;
+            }
+
+            loadedNames.Add(name);
+            if (!HasPathIdentity(path))
+            {
+                unidentifiedNames.Add(name);
             }
         }
 
@@ -238,7 +245,7 @@ public static class ModuleInspectionPolicy
                 continue;
             }
 
-            if (loadedPaths.Contains(path) || loadedNames.Contains(Path.GetFileName(path)))
+            if (loadedPaths.Contains(path) || MatchesByFileName(path, loadedNames, unidentifiedNames))
             {
                 continue;
             }
@@ -247,6 +254,23 @@ public static class ModuleInspectionPolicy
         }
 
         return unloaded;
+    }
+
+    private static bool MatchesByFileName(string path, HashSet<string> loadedNames, HashSet<string> unidentifiedNames)
+    {
+        string name = Path.GetFileName(path);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        return HasPathIdentity(path) ? unidentifiedNames.Contains(name) : loadedNames.Contains(name);
+    }
+
+    private static bool HasPathIdentity(string path)
+    {
+        return path.Contains(Path.DirectorySeparatorChar)
+               && !path.StartsWith(@"\Device\", StringComparison.OrdinalIgnoreCase);
     }
 
     public static string CanonicalModulePath(string? path)
