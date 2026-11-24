@@ -8,6 +8,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         Title="HydraHook Manager"
+        Icon="pack://application:,,,/Assets/HydraHook.ico"
         Height="640"
         Width="1040"
         MinHeight="560"
@@ -23,6 +24,7 @@
         <views:InjectionBadgeVisibilityConverter x:Key="InjectionBadgeVisibility" />
         <views:InjectionBadgeTextConverter x:Key="InjectionBadgeText" />
         <views:InjectionBadgeBrushConverter x:Key="InjectionBadgeBrush" />
+        <views:BindingProxy x:Key="ViewModelProxy" Data="{Binding}" />
         <Style x:Key="ProcessItemStyle" TargetType="ui:ListViewItem">
             <Setter Property="Height" Value="30" />
             <Setter Property="Margin" Value="0,0,0,1" />
@@ -78,21 +80,31 @@
             </Style.Triggers>
         </Style>
     </ui:FluentWindow.Resources>
-    <Grid x:Name="RootLayout" Margin="16" SizeChanged="RootLayout_SizeChanged">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <ui:TitleBar Grid.Row="0"
+                     Title="HydraHook Manager"
+                     Height="32"
+                     Padding="12,0,8,0"
+                     FontSize="14"
+                     Icon="{ui:ImageIcon 'pack://application:,,,/Assets/HydraHook.ico'}" />
+        <Grid x:Name="RootLayout" Grid.Row="1" Margin="16,8,16,16" SizeChanged="RootLayout_SizeChanged">
         <Grid.RowDefinitions>
             <RowDefinition x:Name="HeaderRow" Height="Auto" />
             <RowDefinition Height="*" MinHeight="160" />
             <RowDefinition x:Name="SplitterRow" Height="Auto" />
-            <RowDefinition x:Name="DllPaneRow" Height="180" MinHeight="170" />
+            <RowDefinition x:Name="DllPaneRow" Height="280" MinHeight="240" />
             <RowDefinition x:Name="ActionRow" Height="Auto" />
             <RowDefinition x:Name="SnackbarRow" Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Header -->
-        <StackPanel Grid.Row="0" Margin="0,0,0,16">
-            <ui:TitleBar Title="HydraHook Manager" />
+        <StackPanel Grid.Row="0">
             <Border x:Name="WatchBanner"
-                    Margin="0,8,0,0"
+                    Margin="0,0,0,8"
                     Padding="8,6"
                     CornerRadius="4"
                     Background="#22D97706"
@@ -189,8 +201,7 @@
                              ContextMenuOpening="ProcessListView_ContextMenuOpening"
                              SizeChanged="ProcessListView_SizeChanged">
                     <ui:ListView.ContextMenu>
-                        <ContextMenu x:Name="ProcessContextMenu"
-                                     DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                        <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                             <MenuItem Header="Inject configured DLLs" Command="{Binding InjectCommand}" />
                             <MenuItem Header="Eject configured DLLs" Command="{Binding EjectCommand}" />
                             <MenuItem Header="Watch &amp; Auto-Inject this executable..." Command="{Binding WatchSelectedProcessCommand}" />
@@ -198,7 +209,7 @@
                                 <MenuItem.ItemContainerStyle>
                                     <Style TargetType="MenuItem">
                                         <Setter Property="Header" Value="{Binding}" />
-                                        <Setter Property="Command" Value="{Binding DataContext.EjectDllCommand, Source={x:Reference ProcessContextMenu}}" />
+                                        <Setter Property="Command" Value="{Binding Data.EjectDllCommand, Source={StaticResource ViewModelProxy}}" />
                                         <Setter Property="CommandParameter" Value="{Binding}" />
                                     </Style>
                                 </MenuItem.ItemContainerStyle>
@@ -407,7 +418,7 @@
                                TextTrimming="CharacterEllipsis"
                                VerticalAlignment="Center" />
                 </DockPanel>
-                <DockPanel Grid.Row="1" Margin="0,0,0,8" LastChildFill="True">
+                <DockPanel Grid.Row="1" Margin="0,0,0,8" LastChildFill="True" VerticalAlignment="Top">
                     <ui:Button DockPanel.Dock="Right"
                                Content="Watch..."
                                Margin="8,0,0,0"
@@ -421,10 +432,28 @@
                                Content="Save"
                                Margin="8,0,0,0"
                                Click="SaveProfileButton_Click" />
-                    <ComboBox MinWidth="160"
-                              ToolTip="Injection profile"
-                              ItemsSource="{Binding ProfileNames}"
-                              SelectedItem="{Binding ActiveProfileName, Mode=TwoWay}" />
+                    <Grid MinWidth="160" VerticalAlignment="Center">
+                        <ComboBox ToolTip="Saved DLL list. Save names the DLLs that are checked now."
+                                  IsEnabled="{Binding HasSavedProfiles}"
+                                  ItemsSource="{Binding ProfileNames}"
+                                  SelectedItem="{Binding ActiveProfileName, Mode=TwoWay}" />
+                        <TextBlock Margin="8,0,28,0"
+                                   VerticalAlignment="Center"
+                                   Opacity="0.55"
+                                   IsHitTestVisible="False"
+                                   Text="No saved profile">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ActiveProfileName}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
                 </DockPanel>
                 <ListBox x:Name="DllListBox"
                          Grid.Row="2"
@@ -433,8 +462,16 @@
                          ItemsSource="{Binding DllItems}"
                          SelectedItem="{Binding SelectedDll, Mode=TwoWay}"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.CanContentScroll="True"
+                         VirtualizingPanel.ScrollUnit="Pixel"
                          DragOver="DllListBox_DragOver"
                          Drop="DllListBox_Drop">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                            <Setter Property="Padding" Value="4,6" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Border x:Name="DllRow" ToolTip="{Binding StatusTooltip}">
@@ -447,13 +484,18 @@
                                     <CheckBox Grid.Column="0"
                                               VerticalAlignment="Center"
                                               IsChecked="{Binding IsChecked, Mode=TwoWay}" />
-                                    <StackPanel Grid.Column="1" Margin="8,0,8,0" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{Binding Path}"
+                                    <Grid Grid.Column="1" Margin="8,0,8,0" VerticalAlignment="Center">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Grid.Row="0" Text="{Binding FileName}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Row="1"
+                                                   Text="{Binding Path}"
                                                    Opacity="0.65"
                                                    FontSize="11"
                                                    TextTrimming="CharacterEllipsis" />
-                                    </StackPanel>
+                                    </Grid>
                                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                         <Border x:Name="ArchBadge"
                                                 Margin="4,0,0,0"
@@ -554,5 +596,6 @@
 
         <!-- Host for content dialogs (update prompt) -->
         <ui:ContentDialogHost x:Name="RootContentDialog" Grid.RowSpan="6" />
+        </Grid>
     </Grid>
 </ui:FluentWindow>

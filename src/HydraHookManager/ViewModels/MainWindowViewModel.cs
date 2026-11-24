@@ -149,6 +149,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _showInjectedOnly = settings.ShowInjectedOnly;
         _isAutoRefreshEnabled = settings.IsAutoRefreshEnabled;
         settings.Profiles ??= [];
+        ProfileNames.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasSavedProfiles));
         _suppressProfileApply = true;
         try
         {
@@ -186,6 +187,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public ObservableCollection<DllItem> DllItems { get; } = [];
 
     public ObservableCollection<string> ProfileNames { get; } = [];
+
+    public bool HasSavedProfiles => ProfileNames.Count > 0;
 
     public AppSettings Settings => _settingsService.Current;
 
