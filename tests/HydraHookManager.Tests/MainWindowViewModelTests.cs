@@ -1160,6 +1160,286 @@ public class MainWindowViewModelTests
             return result;
         }
     }
+
+    [Fact]
+    public async Task Watch_ignores_processes_already_running_and_injects_each_new_launch_once()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+        viewModel.AddDlls([@"C:\a.dll"]);
+        _processes.Processes.Add(TestData.Process(8, "launchme.exe", window: "Old", created: 800, exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[8] = 800;
+        viewModel.ArmWatch(new WatchConfig
+        {
+            Target = @"C:\Games\launchme.exe",
+            Trigger = WatchTrigger.OnLaunch,
+            DelayMs = 0
+        });
+        await viewModel.RefreshAsync();
+
+        Assert.True(viewModel.IsWatchArmed);
+        Assert.Empty(_injector.Calls);
+        Assert.Equal(10, viewModel.SelectedProcess!.Id);
+
+        ProcessInfo launched = TestData.Process(40, "launchme.exe", window: "Play", created: 9000, exePath: @"C:\Games\launchme.exe");
+        _processes.Processes.Add(launched);
+        _processes.LiveCreationTimes[40] = 9000;
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(40, Assert.Single(_injector.Calls).ProcessId);
+        Assert.Equal([@"C:\a.dll"], _injector.Calls[0].Dlls);
+        Assert.Equal(10, viewModel.SelectedProcess.Id);
+
+        await viewModel.RefreshAsync();
+        Assert.Single(_injector.Calls);
+
+        _processes.Processes.RemoveAll(process => process.Id == 40);
+        ProcessInfo relaunched = TestData.Process(41, "launchme.exe", window: "Play", created: 9100, exePath: @"C:\Games\launchme.exe");
+        _processes.Processes.Add(relaunched);
+        _processes.LiveCreationTimes[41] = 9100;
+        await viewModel.RefreshAsync();
+
+        Assert.Equal([40, 41], _injector.Calls.Select(call => call.ProcessId));
+        Assert.True(viewModel.IsWatchArmed);
+    }
+
+    [Fact]
+    public async Task A_finished_auto_inject_does_not_overwrite_a_newer_watch()
+    {
+        TaskCompletionSource<InjectResult> gate = new();
+        _injector.InjectGate = gate.Task;
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\launchme.exe", Trigger = WatchTrigger.OnLaunch });
+        _processes.Processes.Add(TestData.Process(40, "launchme.exe", window: "Play", created: 9000, exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[40] = 9000;
+        await viewModel.RefreshAsync();
+
+        Assert.True(viewModel.IsOperationRunning);
+        viewModel.DisarmWatch();
+        _processes.Processes.RemoveAll(process => process.Id == 40);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\other.exe", Trigger = WatchTrigger.OnLaunch });
+        string armedStatus = viewModel.WatchStatusText;
+
+        gate.SetResult(new InjectResult(true, "injected", ""));
+        for (int attempt = 0; viewModel.IsOperationRunning && attempt < 50; attempt++)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.False(viewModel.IsOperationRunning);
+        Assert.Equal(armedStatus, viewModel.WatchStatusText);
+        Assert.Contains("other.exe", viewModel.WatchStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(_ledger.Current.Entries, entry => entry.ProcessId == 40);
+    }
+
+    [Fact]
+    public async Task Replacing_a_watch_does_not_inject_the_previous_target()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\launchme.exe", Trigger = WatchTrigger.OnLaunch });
+
+        _processes.Processes.Add(TestData.Process(40, "launchme.exe", window: "Play", created: 9000, exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[40] = 9000;
+        _processes.Processes.Add(TestData.Process(41, "other.exe", window: "Old", created: 9100, exePath: @"C:\Games\other.exe"));
+        _processes.LiveCreationTimes[41] = 9100;
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\other.exe", Trigger = WatchTrigger.OnLaunch });
+
+        Assert.True(viewModel.IsWatchArmed);
+        Assert.Contains("other.exe", viewModel.WatchStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(_injector.Calls);
+
+        _processes.Processes.Add(TestData.Process(42, "other.exe", window: "New", created: 9200, exePath: @"C:\Games\other.exe"));
+        _processes.LiveCreationTimes[42] = 9200;
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(42, Assert.Single(_injector.Calls).ProcessId);
+    }
+
+    [Fact]
+    public async Task A_failed_replacement_refresh_does_not_leave_the_old_watch_armed()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\launchme.exe", Trigger = WatchTrigger.OnLaunch });
+        Assert.True(viewModel.IsWatchArmed);
+
+        _processes.Failure = new InvalidOperationException("unavailable");
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\other.exe", Trigger = WatchTrigger.OnLaunch });
+
+        Assert.False(viewModel.IsWatchArmed);
+        Assert.Equal(@"C:\Games\other.exe", viewModel.WatchTarget);
+        Assert.Empty(_injector.Calls);
+
+        _processes.Failure = null;
+        _processes.Processes.Add(TestData.Process(40, "launchme.exe", window: "Play", created: 9000, exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[40] = 9000;
+        await viewModel.RefreshAsync();
+
+        Assert.False(viewModel.IsWatchArmed);
+        Assert.Empty(_injector.Calls);
+    }
+
+    [Fact]
+    public async Task Disarming_watch_stops_auto_inject()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\launchme.exe", Trigger = WatchTrigger.OnLaunch });
+        viewModel.DisarmWatch();
+
+        _processes.Processes.Add(TestData.Process(40, "launchme.exe", window: "Play", created: 9000, exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[40] = 9000;
+        await viewModel.RefreshAsync();
+
+        Assert.False(viewModel.IsWatchArmed);
+        Assert.Empty(_injector.Calls);
+    }
+
+    [Fact]
+    public async Task Watch_for_direct3d_scans_a_windowless_launch_and_injects_when_it_loads()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.ArmWatch(new WatchConfig
+        {
+            Target = @"C:\Games\launchme.exe",
+            Trigger = WatchTrigger.WaitForDirect3D
+        });
+
+        _processes.Processes.Add(TestData.Process(40, "launchme.exe", created: 9000, exePath: @"C:\Games\launchme.exe"));
+        _processes.Processes.Add(TestData.Process(42, "helper.exe", created: 9200, exePath: @"C:\Games\helper.exe"));
+        _processes.LiveCreationTimes[40] = 9000;
+        _processes.LiveCreationTimes[42] = 9200;
+        _modules.ResultsByProcess[40] = new ModuleScanResult(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("d3d11.dll", @"C:\Windows\System32\d3d11.dll", 0, 1)],
+            "D3D11");
+
+        await viewModel.RefreshAsync();
+
+        Assert.Contains(_modules.Calls, call => call.ProcessId == 40);
+        Assert.DoesNotContain(_modules.Calls, call => call.ProcessId == 42);
+        Assert.Equal(40, Assert.Single(_injector.Calls).ProcessId);
+        Assert.False(viewModel.ShowDirect3DOnly);
+        Assert.True(viewModel.IsWatchArmed);
+    }
+
+    [Fact]
+    public async Task Watch_auto_inject_sends_only_the_dll_that_matches_the_new_process()
+    {
+        _dlls.Results[@"C:\x86.dll"] = new DllInspectionResult(DllFileStatus.Ok, DllArchitecture.X86);
+        _dlls.Results[@"C:\x64.dll"] = new DllInspectionResult(DllFileStatus.Ok, DllArchitecture.X64);
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.SelectedProcess = viewModel.VisibleProcesses.Single(process => process.Id == 10);
+        viewModel.AddDlls([@"C:\x86.dll", @"C:\x64.dll"]);
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\launchme.exe", Trigger = WatchTrigger.OnLaunch });
+
+        _processes.Processes.Add(TestData.Process(
+            40,
+            "launchme.exe",
+            architecture: "32-bit",
+            window: "Play",
+            created: 9000,
+            exePath: @"C:\Games\launchme.exe"));
+        _processes.LiveCreationTimes[40] = 9000;
+        await viewModel.RefreshAsync();
+
+        (string _, int processId, bool is64Bit, string[] dlls) = Assert.Single(_injector.Calls);
+        Assert.Equal(40, processId);
+        Assert.False(is64Bit);
+        Assert.Equal([@"C:\x86.dll"], dlls);
+        Assert.True(viewModel.DllItems.All(item => item.IsChecked));
+        Assert.Equal(10, viewModel.SelectedProcess!.Id);
+    }
+
+    [Fact]
+    public void Arming_before_the_first_refresh_does_not_inject_processes_already_running()
+    {
+        _processes.Processes = [TestData.Process(7, "game.exe", window: "Play", created: 70, exePath: @"C:\game.exe")];
+        _processes.LiveCreationTimes[7] = 70;
+        MainWindowViewModel viewModel = CreateViewModel();
+        viewModel.AddDlls([@"C:\a.dll"]);
+
+        viewModel.ArmWatch(new WatchConfig { Target = "game.exe", Trigger = WatchTrigger.OnLaunch });
+
+        Assert.True(viewModel.IsWatchArmed);
+        Assert.Empty(_injector.Calls);
+    }
+
+    [Fact]
+    public async Task Watch_refuses_to_arm_without_a_target_or_a_checked_dll()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+
+        viewModel.ArmWatch(new WatchConfig { Target = "game.exe", Trigger = WatchTrigger.OnLaunch });
+        viewModel.AddDlls([@"C:\a.dll"]);
+        viewModel.DllItems[0].IsChecked = false;
+        viewModel.ArmWatch(new WatchConfig { Target = "   ", Trigger = WatchTrigger.OnLaunch });
+
+        Assert.False(viewModel.IsWatchArmed);
+        Assert.Contains(_notifications.Messages, message => message.Message == "Check at least one DLL.");
+        Assert.Contains(_notifications.Messages, message => message.Message == "Choose an executable to watch.");
+    }
+
+    [Fact]
+    public async Task Profiles_save_switch_and_delete_and_switching_disarms_watch()
+    {
+        MainWindowViewModel viewModel = await CreateLoadedViewModelAsync();
+        viewModel.AddDlls([@"C:\a.dll", @"C:\b.dll"]);
+        viewModel.DllItems[1].IsChecked = false;
+        viewModel.ArmWatch(new WatchConfig { Target = @"C:\Games\watched.exe", Trigger = WatchTrigger.WaitForWindow, DelayMs = 15 });
+        viewModel.SaveProfile("Alpha");
+
+        InjectionProfile alpha = _settings.Current.Profiles.Single(profile => profile.Name == "Alpha");
+        Assert.Equal([@"C:\a.dll", @"C:\b.dll"], alpha.Dlls.Select(entry => entry.Path));
+        Assert.False(alpha.Dlls[1].IsChecked);
+        Assert.Equal(@"C:\Games\watched.exe", alpha.Watch!.Target);
+        Assert.Equal(15, alpha.Watch.DelayMs);
+        Assert.True(viewModel.IsWatchArmed);
+
+        viewModel.SaveProfile("Beta");
+        viewModel.DllItems[0].IsChecked = false;
+        viewModel.SaveProfile("Beta");
+        viewModel.ActiveProfileName = "Alpha";
+
+        Assert.False(viewModel.IsWatchArmed);
+        Assert.True(viewModel.DllItems.Single(item => item.Path == @"C:\a.dll").IsChecked);
+        Assert.False(viewModel.DllItems.Single(item => item.Path == @"C:\b.dll").IsChecked);
+        Assert.Equal(@"C:\Games\watched.exe", viewModel.WatchTarget);
+
+        viewModel.DeleteActiveProfile();
+
+        Assert.Null(viewModel.ActiveProfileName);
+        Assert.Equal(["Beta"], viewModel.ProfileNames);
+        Assert.DoesNotContain(_settings.Current.Profiles, profile => profile.Name == "Alpha");
+    }
+
+    [Fact]
+    public void Active_profile_loads_on_startup_and_the_watch_stays_disarmed()
+    {
+        _settings.Current.Dlls = [new DllEntrySetting { Path = @"C:\loose.dll", IsChecked = true }];
+        _settings.Current.Profiles =
+        [
+            new InjectionProfile
+            {
+                Name = "Alpha",
+                Dlls = [new DllEntrySetting { Path = @"C:\profile.dll", IsChecked = false }],
+                Watch = new WatchConfig { Target = "game.exe", Trigger = WatchTrigger.OnLaunch, DelayMs = 25 }
+            }
+        ];
+        _settings.Current.ActiveProfileName = "Alpha";
+
+        MainWindowViewModel viewModel = CreateViewModel();
+
+        Assert.Equal(@"C:\profile.dll", Assert.Single(viewModel.DllItems).Path);
+        Assert.False(viewModel.DllItems[0].IsChecked);
+        Assert.Equal("game.exe", viewModel.WatchTarget);
+        Assert.Equal(WatchTrigger.OnLaunch, viewModel.WatchTrigger);
+        Assert.Equal(25, viewModel.WatchDelayMs);
+        Assert.False(viewModel.IsWatchArmed);
+    }
 }
 
 public class LoadedModulesViewModelTests

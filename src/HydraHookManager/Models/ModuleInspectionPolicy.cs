@@ -89,8 +89,9 @@ public static class ModuleInspectionPolicy
 
     /// <summary>
     ///     Windowed, selected, and ledger-tracked processes, or every process with a known creation time when
-    ///     <paramref name="scanAllAccessible"/> is set. Protected processes are skipped. Requires-admin processes are
-    ///     skipped unless <paramref name="elevated"/> is true. A recent scan is skipped unless this pass forces it.
+    ///     <paramref name="scanAllAccessible"/> is set. Keys in <paramref name="watchKeys"/> are included even when
+    ///     they have no window. Protected processes are skipped. Requires-admin processes are skipped unless
+    ///     <paramref name="elevated"/> is true. A recent scan is skipped unless this pass forces it.
     /// </summary>
     public static List<ProcessInfo> SelectScanTargets(
         IReadOnlyList<ProcessInfo> processes,
@@ -102,12 +103,14 @@ public static class ModuleInspectionPolicy
         long nowTicks,
         long throttleTicks,
         bool forceAll,
-        ProcessInstanceKey? forceKey)
+        ProcessInstanceKey? forceKey,
+        IReadOnlySet<ProcessInstanceKey>? watchKeys = null)
     {
         List<ProcessInfo> targets = [];
         foreach (ProcessInfo process in processes)
         {
-            if (!IsScanCandidate(process, selectedKey, trackedKeys, scanAllAccessible))
+            if (!IsScanCandidate(process, selectedKey, trackedKeys, scanAllAccessible)
+                && !IsWatchTarget(process, watchKeys))
             {
                 continue;
             }
@@ -122,7 +125,10 @@ public static class ModuleInspectionPolicy
                 continue;
             }
 
-            bool forced = forceAll || (forceKey is ProcessInstanceKey key && key.Equals(process.InstanceKey));
+            bool watchTarget = IsWatchTarget(process, watchKeys);
+            bool forced = forceAll
+                          || watchTarget
+                          || (forceKey is ProcessInstanceKey key && key.Equals(process.InstanceKey));
             if (!forced
                 && lastScanTicks.TryGetValue(process.InstanceKey, out long last)
                 && nowTicks - last < throttleTicks)
@@ -207,6 +213,11 @@ public static class ModuleInspectionPolicy
         }
 
         return trackedKeys.Contains(process.InstanceKey);
+    }
+
+    private static bool IsWatchTarget(ProcessInfo process, IReadOnlySet<ProcessInstanceKey>? watchKeys)
+    {
+        return watchKeys is not null && watchKeys.Contains(process.InstanceKey);
     }
 
     private static bool IsSelected(ProcessInfo process, ProcessInstanceKey? selectedKey)

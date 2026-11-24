@@ -120,6 +120,86 @@ public sealed class JsonSettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void Profiles_round_trip_and_drop_blank_duplicate_and_missing_names()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+        File.WriteAllText(SettingsPath, """
+            {
+              "Profiles": [
+                null,
+                {"Name":"  ","Dlls":[{"Path":"C:\\nope.dll","IsChecked":true}]},
+                {"Name":"  Alpha ","Dlls":[null,{"Path":"C:\\a.dll","IsChecked":false},{"Path":" ","IsChecked":true}],"Watch":{"Target":"  game.exe  ","Trigger":"OnLaunch","DelayMs":999999}},
+                {"Name":"alpha","Dlls":[{"Path":"C:\\other.dll","IsChecked":true}]}
+              ],
+              "ActiveProfileName":"ALPHA"
+            }
+            """);
+
+        AppSettings loaded = new JsonSettingsService(SettingsPath).Current;
+
+        InjectionProfile profile = Assert.Single(loaded.Profiles);
+        Assert.Equal("Alpha", profile.Name);
+        Assert.Equal("Alpha", loaded.ActiveProfileName);
+        Assert.Equal(@"C:\a.dll", Assert.Single(profile.Dlls).Path);
+        Assert.False(profile.Dlls[0].IsChecked);
+        Assert.Equal("game.exe", profile.Watch!.Target);
+        Assert.Equal(WatchTrigger.OnLaunch, profile.Watch.Trigger);
+        Assert.Equal(30_000, profile.Watch.DelayMs);
+
+        loaded.Profiles.Add(new InjectionProfile
+        {
+            Name = "Beta",
+            Dlls = [new DllEntrySetting { Path = @"C:\b.dll", IsChecked = true }],
+            Watch = new WatchConfig { Target = @"C:\b.exe", Trigger = WatchTrigger.WaitForDirect3D, DelayMs = 10 }
+        });
+        JsonSettingsService writer = new(SettingsPath);
+        writer.Current.Profiles = loaded.Profiles;
+        writer.Current.ActiveProfileName = "Beta";
+        writer.Save();
+
+        AppSettings roundTrip = new JsonSettingsService(SettingsPath).Current;
+        Assert.Equal("Beta", roundTrip.ActiveProfileName);
+        Assert.Equal(WatchTrigger.WaitForDirect3D, roundTrip.Profiles.Single(item => item.Name == "Beta").Watch!.Trigger);
+        Assert.DoesNotContain("IsWatchArmed", File.ReadAllText(SettingsPath), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("\"FutureTrigger\"")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    public void An_unknown_watch_trigger_falls_back_without_discarding_the_file(string triggerJson)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+        string json = """
+            {
+              "DllPaths":["C:\\kept.dll"],
+              "Profiles":[{"Name":"Alpha","Dlls":[{"Path":"C:\\a.dll","IsChecked":true}],"Watch":{"Target":"game.exe","Trigger":__TRIGGER__,"DelayMs":5}}],
+              "ActiveProfileName":"Alpha"
+            }
+            """.Replace("__TRIGGER__", triggerJson, StringComparison.Ordinal);
+        File.WriteAllText(SettingsPath, json);
+
+        AppSettings loaded = new JsonSettingsService(SettingsPath).Current;
+
+        Assert.Equal([@"C:\kept.dll"], loaded.DllPaths);
+        Assert.Equal("Alpha", loaded.ActiveProfileName);
+        Assert.Equal(WatchTrigger.WaitForWindow, Assert.Single(loaded.Profiles).Watch!.Trigger);
+        Assert.Equal("game.exe", loaded.Profiles[0].Watch!.Target);
+    }
+
+    [Fact]
+    public void An_unknown_active_profile_name_is_cleared()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
+        File.WriteAllText(SettingsPath, """{"Profiles":[{"Name":"Alpha","Dlls":[]}],"ActiveProfileName":"missing"}""");
+
+        AppSettings loaded = new JsonSettingsService(SettingsPath).Current;
+
+        Assert.Equal("Alpha", Assert.Single(loaded.Profiles).Name);
+        Assert.Null(loaded.ActiveProfileName);
+    }
+
+    [Fact]
     public void Save_leaves_no_temporary_file_behind()
     {
         JsonSettingsService service = new(SettingsPath);

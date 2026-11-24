@@ -13,6 +13,7 @@ public sealed class ProcessInfo : INotifyPropertyChanged
 {
     private ImageSource? _icon;
     private string? _windowTitle;
+    private bool _hasWindow;
     private int _depth;
     private bool _hasChildren;
     private bool _isExpanded;
@@ -36,7 +37,14 @@ public sealed class ProcessInfo : INotifyPropertyChanged
 
     public ProcessInstanceKey InstanceKey => new(Id, CreationTime);
 
-    public bool HasWindow => !string.IsNullOrWhiteSpace(WindowTitle);
+    /// <summary>
+    ///     True when the process owns a visible window. A window with no caption still counts.
+    /// </summary>
+    public bool HasWindow
+    {
+        get => _hasWindow || !string.IsNullOrWhiteSpace(_windowTitle);
+        set => SetField(ref _hasWindow, value);
+    }
 
     public bool HasDirect3D => !string.IsNullOrEmpty(GraphicsApi);
 
@@ -178,6 +186,7 @@ public sealed class ProcessInfo : INotifyPropertyChanged
     public void UpdateFrom(ProcessInfo snapshot)
     {
         WindowTitle = snapshot.WindowTitle;
+        HasWindow = snapshot.HasWindow;
         if (snapshot.Icon is not null)
         {
             Icon = snapshot.Icon;

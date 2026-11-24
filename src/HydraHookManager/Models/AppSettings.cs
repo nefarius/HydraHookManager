@@ -15,6 +15,13 @@ public sealed class AppSettings
     /// </summary>
     public List<DllEntrySetting>? Dlls { get; set; }
 
+    /// <summary>
+    ///     Named DLL lists. Watch arming is not stored; a saved <see cref="InjectionProfile.Watch"/> is only the target.
+    /// </summary>
+    public List<InjectionProfile> Profiles { get; set; } = [];
+
+    public string? ActiveProfileName { get; set; }
+
     public double? DllPaneHeight { get; set; }
 
     public string SortKey { get; set; } = "Name";

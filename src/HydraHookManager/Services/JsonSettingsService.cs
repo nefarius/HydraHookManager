@@ -86,12 +86,11 @@ public sealed class JsonSettingsService : ISettingsService
             }
             else
             {
-                settings.Dlls = settings.Dlls
-                    .Where(entry => entry is not null && !string.IsNullOrWhiteSpace(entry.Path))
-                    .ToList();
+                settings.Dlls = CleanDllEntries(settings.Dlls);
                 settings.DllPaths = settings.Dlls.Select(entry => entry.Path).ToList();
             }
 
+            NormalizeProfiles(settings);
             return settings;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -99,5 +98,64 @@ public sealed class JsonSettingsService : ISettingsService
             _logger?.LogWarning(ex, "Could not read settings from {Path}; using defaults", _path);
             return new AppSettings();
         }
+    }
+
+    private static List<DllEntrySetting> CleanDllEntries(IEnumerable<DllEntrySetting>? entries)
+    {
+        return (entries ?? [])
+            .Where(entry => entry is not null && !string.IsNullOrWhiteSpace(entry.Path))
+            .ToList();
+    }
+
+    private static void NormalizeProfiles(AppSettings settings)
+    {
+        List<InjectionProfile> profiles = [];
+        HashSet<string> names = new(StringComparer.OrdinalIgnoreCase);
+        foreach (InjectionProfile? profile in settings.Profiles ?? [])
+        {
+            if (profile is null || string.IsNullOrWhiteSpace(profile.Name))
+            {
+                continue;
+            }
+
+            string name = profile.Name.Trim();
+            if (!names.Add(name))
+            {
+                continue;
+            }
+
+            profile.Name = name;
+            profile.Dlls = CleanDllEntries(profile.Dlls);
+            profile.Watch = CleanWatch(profile.Watch);
+            profiles.Add(profile);
+        }
+
+        settings.Profiles = profiles;
+        if (string.IsNullOrWhiteSpace(settings.ActiveProfileName))
+        {
+            settings.ActiveProfileName = null;
+            return;
+        }
+
+        InjectionProfile? active = profiles.FirstOrDefault(profile =>
+            string.Equals(profile.Name, settings.ActiveProfileName.Trim(), StringComparison.OrdinalIgnoreCase));
+        settings.ActiveProfileName = active?.Name;
+    }
+
+    private static WatchConfig? CleanWatch(WatchConfig? watch)
+    {
+        if (watch is null || string.IsNullOrWhiteSpace(watch.Target))
+        {
+            return null;
+        }
+
+        watch.Target = watch.Target.Trim();
+        watch.DelayMs = WatchPolicy.ClampDelayMs(watch.DelayMs);
+        if (!Enum.IsDefined(watch.Trigger))
+        {
+            watch.Trigger = WatchTrigger.WaitForWindow;
+        }
+
+        return watch;
     }
 }

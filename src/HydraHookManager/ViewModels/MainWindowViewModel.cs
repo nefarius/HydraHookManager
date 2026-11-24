@@ -47,8 +47,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private int _scanVersion;
     private bool _scanInFlight;
     private bool _hasProcessSnapshot;
+    private bool _suppressProfileApply;
+    private int _armVersion;
+    private WatchSessionState? _watchSession;
+    private WatchConfig? _pendingArm;
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(WatchSelectedProcessCommand))]
     private ProcessInfo? _selectedProcess;
 
     [ObservableProperty]
@@ -56,6 +61,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     [ObservableProperty]
     private string _dllSelectionSummary = "Add DLLs to inject.";
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(DeleteActiveProfileCommand))]
+    private string? _activeProfileName;
+
+    [ObservableProperty]
+    private bool _isWatchArmed;
+
+    [ObservableProperty]
+    private string _watchTarget = "";
+
+    [ObservableProperty]
+    private WatchTrigger _watchTrigger = WatchTrigger.WaitForWindow;
+
+    [ObservableProperty]
+    private int _watchDelayMs;
+
+    [ObservableProperty]
+    private string _watchStatusText = "";
 
     [ObservableProperty]
     private bool _isRefreshing;
@@ -124,12 +148,34 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _showDirect3DOnly = settings.ShowDirect3DOnly;
         _showInjectedOnly = settings.ShowInjectedOnly;
         _isAutoRefreshEnabled = settings.IsAutoRefreshEnabled;
-        foreach (DllEntrySetting entry in ConfiguredDlls(settings))
+        settings.Profiles ??= [];
+        _suppressProfileApply = true;
+        try
         {
-            if (!string.IsNullOrWhiteSpace(entry.Path) && !Contains(entry.Path))
+            foreach (InjectionProfile profile in settings.Profiles)
             {
-                AddDllItem(entry.Path, entry.IsChecked);
+                if (!string.IsNullOrWhiteSpace(profile.Name))
+                {
+                    ProfileNames.Add(profile.Name);
+                }
             }
+
+            InjectionProfile? active = FindProfile(settings.ActiveProfileName);
+            if (active is not null)
+            {
+                LoadDllEntries(active.Dlls);
+                ApplyWatchFields(active.Watch);
+                ActiveProfileName = active.Name;
+            }
+            else
+            {
+                LoadDllEntries(ConfiguredDlls(settings));
+                ActiveProfileName = null;
+            }
+        }
+        finally
+        {
+            _suppressProfileApply = false;
         }
 
         UpdateDllSelectionSummary();
@@ -138,6 +184,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public ObservableCollection<ProcessInfo> VisibleProcesses { get; } = [];
 
     public ObservableCollection<DllItem> DllItems { get; } = [];
+
+    public ObservableCollection<string> ProfileNames { get; } = [];
 
     public AppSettings Settings => _settingsService.Current;
 
@@ -159,6 +207,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
     ///     Raised when the view should open the loaded-modules inspector for a process.
     /// </summary>
     public event EventHandler<ProcessInfo>? InspectModulesRequested;
+
+    /// <summary>
+    ///     Raised when the view should open the watch configuration window.
+    /// </summary>
+    public event EventHandler<WatchConfigRequestedEventArgs>? WatchConfigRequested;
 
     partial void OnSelectedProcessChanged(ProcessInfo? value)
     {
@@ -238,7 +291,38 @@ public sealed partial class MainWindowViewModel : ObservableObject
         settings.ShowDirect3DOnly = ShowDirect3DOnly;
         settings.ShowInjectedOnly = ShowInjectedOnly;
         settings.IsAutoRefreshEnabled = IsAutoRefreshEnabled;
+        settings.ActiveProfileName = string.IsNullOrWhiteSpace(ActiveProfileName) ? null : ActiveProfileName;
+        UpdateActiveProfileContents();
         _settingsService.Save();
+    }
+
+    partial void OnActiveProfileNameChanged(string? value)
+    {
+        if (_suppressProfileApply)
+        {
+            return;
+        }
+
+        _suppressProfileApply = true;
+        try
+        {
+            DisarmWatch();
+            InjectionProfile? profile = FindProfile(value);
+            if (profile is null)
+            {
+                ActiveProfileName = null;
+                SaveSettings();
+                return;
+            }
+
+            LoadProfile(profile);
+            ActiveProfileName = profile.Name;
+            SaveSettings();
+        }
+        finally
+        {
+            _suppressProfileApply = false;
+        }
     }
 
     [RelayCommand]
@@ -404,6 +488,152 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 PublishView(sameSnapshot: true);
             }
         }
+    }
+
+    public void SaveProfile(string? name)
+    {
+        string trimmed = name?.Trim() ?? "";
+        if (trimmed.Length == 0)
+        {
+            _notifications.Show("Profile", "Enter a profile name.", NotificationSeverity.Warning);
+            return;
+        }
+
+        AppSettings settings = Settings;
+        settings.Profiles ??= [];
+        InjectionProfile? profile = settings.Profiles.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, trimmed, StringComparison.OrdinalIgnoreCase));
+        if (profile is null)
+        {
+            profile = new InjectionProfile();
+            settings.Profiles.Add(profile);
+        }
+
+        profile.Name = trimmed;
+        profile.Dlls = CurrentDllEntries();
+        profile.Watch = CaptureWatchConfig();
+        bool listed = false;
+        for (int index = 0; index < ProfileNames.Count; index++)
+        {
+            if (!string.Equals(ProfileNames[index], trimmed, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!string.Equals(ProfileNames[index], trimmed, StringComparison.Ordinal))
+            {
+                ProfileNames[index] = trimmed;
+            }
+
+            listed = true;
+            break;
+        }
+
+        if (!listed)
+        {
+            ProfileNames.Add(trimmed);
+        }
+
+        _suppressProfileApply = true;
+        try
+        {
+            ActiveProfileName = trimmed;
+        }
+        finally
+        {
+            _suppressProfileApply = false;
+        }
+
+        SaveSettings();
+    }
+
+    [RelayCommand(CanExecute = nameof(HasActiveProfile))]
+    public void DeleteActiveProfile()
+    {
+        InjectionProfile? profile = FindProfile(ActiveProfileName);
+        if (profile is null)
+        {
+            _notifications.Show("Profile", "Select a profile to delete.", NotificationSeverity.Warning);
+            return;
+        }
+
+        DisarmWatch();
+        Settings.Profiles?.Remove(profile);
+        for (int index = ProfileNames.Count - 1; index >= 0; index--)
+        {
+            if (string.Equals(ProfileNames[index], profile.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                ProfileNames.RemoveAt(index);
+            }
+        }
+
+        _suppressProfileApply = true;
+        try
+        {
+            ActiveProfileName = null;
+        }
+        finally
+        {
+            _suppressProfileApply = false;
+        }
+
+        SaveSettings();
+    }
+
+    public void ArmWatch(WatchConfig? config)
+    {
+        WatchConfig source = NormalizeWatch(config ?? new WatchConfig
+        {
+            Target = WatchTarget,
+            Trigger = WatchTrigger,
+            DelayMs = WatchDelayMs
+        });
+        if (string.IsNullOrWhiteSpace(source.Target))
+        {
+            _notifications.Show("Watch", "Choose an executable to watch.", NotificationSeverity.Warning);
+            return;
+        }
+
+        if (!DllItems.Any(item => item.IsChecked))
+        {
+            _notifications.Show("Watch", "Check at least one DLL.", NotificationSeverity.Warning);
+            return;
+        }
+
+        DisarmWatch();
+        ApplyWatchFields(source);
+        _pendingArm = source;
+        _ = RunRefreshAsync(userInitiated: true);
+    }
+
+    [RelayCommand]
+    public void DisarmWatch()
+    {
+        _armVersion++;
+        _pendingArm = null;
+        _watchSession = null;
+        IsWatchArmed = false;
+        WatchStatusText = "";
+    }
+
+    [RelayCommand]
+    private void ConfigureWatch()
+    {
+        WatchConfigRequested?.Invoke(this, new WatchConfigRequestedEventArgs(
+            string.IsNullOrWhiteSpace(WatchTarget) ? null : WatchTarget));
+    }
+
+    [RelayCommand(CanExecute = nameof(CanWatchSelectedProcess))]
+    private void WatchSelectedProcess()
+    {
+        if (SelectedProcess is not ProcessInfo selected)
+        {
+            _notifications.Show("Select process", "Please select a process from the list.", NotificationSeverity.Warning);
+            return;
+        }
+
+        string target = string.IsNullOrWhiteSpace(selected.ExePath) ? selected.Name : selected.ExePath;
+        WatchConfigRequested?.Invoke(this, new WatchConfigRequestedEventArgs(target));
     }
 
     [RelayCommand(CanExecute = nameof(CanRunInjector))]
@@ -639,11 +869,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ApplyLedgerAndMarks();
             PublishView(sameSnapshot: false);
             StartModuleScan(forceAll: userInitiated, forceKey: null);
+            ConsiderAutoInject();
+            if (version == _refreshVersion)
+            {
+                TryCompletePendingArm();
+            }
 
             _ = PopulateIconsAsync(_processes, token);
         }
         catch (OperationCanceledException)
         {
+            if (version == _refreshVersion)
+            {
+                _pendingArm = null;
+            }
         }
         catch (Exception ex)
         {
@@ -651,6 +890,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
             if (version == _refreshVersion && userInitiated)
             {
                 _notifications.Show("Process list", ex.Message, NotificationSeverity.Error);
+            }
+
+            if (version == _refreshVersion)
+            {
+                FailPendingArm();
             }
         }
         finally
@@ -1182,6 +1426,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 ProcessInstanceKey? selected = _selectedProcessId is int selectedId
                     ? new ProcessInstanceKey(selectedId, _selectedProcessCreationTime)
                     : null;
+                HashSet<ProcessInstanceKey> watchKeys = [];
+                foreach (ProcessInfo process in WatchPolicy.FindScanTargetsForWatch(_processes, _watchSession))
+                {
+                    watchKeys.Add(process.InstanceKey);
+                }
+
                 targets = ModuleInspectionPolicy.SelectScanTargets(
                     _processes,
                     selected,
@@ -1192,7 +1442,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     Environment.TickCount64,
                     ModuleInspectionPolicy.DefaultThrottleTicks,
                     forceAll,
-                    forceKey);
+                    forceKey,
+                    watchKeys);
             }
 
             List<(ProcessInstanceKey Key, ModuleScanResult Result)> results = [];
@@ -1245,6 +1496,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             PublishView(sameSnapshot: true);
         }
+
+        ConsiderAutoInject();
     }
 
     private void ApplyLedgerAndMarks()
@@ -1317,6 +1570,280 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RefreshDllSelectionState();
     }
 
+    private bool HasActiveProfile()
+    {
+        return FindProfile(ActiveProfileName) is not null;
+    }
+
+    private bool CanWatchSelectedProcess()
+    {
+        return SelectedProcess is not null;
+    }
+
+    private void LoadDllEntries(IReadOnlyList<DllEntrySetting> entries)
+    {
+        foreach (DllEntrySetting entry in entries)
+        {
+            if (entry is null || string.IsNullOrWhiteSpace(entry.Path) || Contains(entry.Path))
+            {
+                continue;
+            }
+
+            AddDllItem(entry.Path, entry.IsChecked);
+        }
+    }
+
+    private void LoadProfile(InjectionProfile profile)
+    {
+        foreach (DllItem item in DllItems.ToList())
+        {
+            item.PropertyChanged -= OnDllItemPropertyChanged;
+            DllItems.Remove(item);
+        }
+
+        SelectedDll = null;
+        LoadDllEntries(profile.Dlls);
+        ApplyWatchFields(profile.Watch);
+        ApplyLedgerAndMarks();
+        RefreshDllSelectionState();
+        UpdateDllSelectionSummary();
+    }
+
+    private InjectionProfile? FindProfile(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        return (Settings.Profiles ?? []).FirstOrDefault(profile =>
+            string.Equals(profile.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private List<DllEntrySetting> CurrentDllEntries()
+    {
+        return DllItems.Select(item => new DllEntrySetting { Path = item.Path, IsChecked = item.IsChecked }).ToList();
+    }
+
+    private void UpdateActiveProfileContents()
+    {
+        InjectionProfile? profile = FindProfile(ActiveProfileName);
+        if (profile is null)
+        {
+            return;
+        }
+
+        profile.Dlls = CurrentDllEntries();
+        profile.Watch = CaptureWatchConfig();
+    }
+
+    private WatchConfig? CaptureWatchConfig()
+    {
+        if (string.IsNullOrWhiteSpace(WatchTarget))
+        {
+            return null;
+        }
+
+        return new WatchConfig
+        {
+            Target = WatchTarget.Trim(),
+            Trigger = WatchTrigger,
+            DelayMs = WatchPolicy.ClampDelayMs(WatchDelayMs)
+        };
+    }
+
+    private void ApplyWatchFields(WatchConfig? watch)
+    {
+        if (watch is null || string.IsNullOrWhiteSpace(watch.Target))
+        {
+            WatchTarget = "";
+            WatchTrigger = WatchTrigger.WaitForWindow;
+            WatchDelayMs = 0;
+            return;
+        }
+
+        WatchTarget = watch.Target.Trim();
+        WatchTrigger = Enum.IsDefined(watch.Trigger) ? watch.Trigger : WatchTrigger.WaitForWindow;
+        WatchDelayMs = WatchPolicy.ClampDelayMs(watch.DelayMs);
+    }
+
+    private static WatchConfig NormalizeWatch(WatchConfig source)
+    {
+        return new WatchConfig
+        {
+            Target = source.Target?.Trim() ?? "",
+            Trigger = Enum.IsDefined(source.Trigger) ? source.Trigger : WatchTrigger.WaitForWindow,
+            DelayMs = WatchPolicy.ClampDelayMs(source.DelayMs)
+        };
+    }
+
+    private void TryCompletePendingArm()
+    {
+        if (_pendingArm is not WatchConfig pending || !_hasProcessSnapshot)
+        {
+            return;
+        }
+
+        _pendingArm = null;
+        CompleteArm(pending);
+    }
+
+    private void FailPendingArm()
+    {
+        _pendingArm = null;
+    }
+
+    private void CompleteArm(WatchConfig source)
+    {
+        WatchConfig armed = NormalizeWatch(source);
+        _watchSession = new WatchSessionState(armed);
+        WatchPolicy.SeedExistingProcesses(_processes, _watchSession);
+        IsWatchArmed = true;
+        WatchStatusText = DescribeArmedWatch();
+        SaveSettings();
+        if (armed.Trigger == WatchTrigger.WaitForDirect3D)
+        {
+            StartModuleScan(forceAll: true, forceKey: null);
+        }
+    }
+
+    private string DescribeArmedWatch()
+    {
+        if (_watchSession is null)
+        {
+            return "";
+        }
+
+        WatchConfig config = _watchSession.Config;
+        string when = config.Trigger switch
+        {
+            WatchTrigger.OnLaunch => "on launch",
+            WatchTrigger.WaitForDirect3D => "when Direct3D loads",
+            _ => "when a window opens"
+        };
+        string delay = config.DelayMs > 0 ? $" after {config.DelayMs} ms" : "";
+        string name = config.Target.Contains('\\') || config.Target.Contains('/')
+            ? Path.GetFileName(config.Target)
+            : config.Target;
+        return $"Watching {name} {when}{delay}.";
+    }
+
+    private void ConsiderAutoInject()
+    {
+        WatchSessionState? session = _watchSession;
+        if (session is null || IsOperationRunning)
+        {
+            return;
+        }
+
+        ProcessInfo? ready = WatchPolicy.EvaluateTick(_processes, session, Environment.TickCount64);
+        if (ready is null)
+        {
+            return;
+        }
+
+        session.HandledInstances.Add(ready.InstanceKey);
+        _ = AutoInjectAsync(ready, session);
+    }
+
+    private async Task AutoInjectAsync(ProcessInfo process, WatchSessionState session)
+    {
+        if (!ReferenceEquals(_watchSession, session))
+        {
+            return;
+        }
+
+        IsOperationRunning = true;
+        try
+        {
+            RefreshDllInspections();
+            DllOperationSelection selection = DllSelectionPolicy.ResolveForOperation(
+                DllItems,
+                DllSelectionPolicy.ParseProcessArchitecture(process.Architecture),
+                eject: false);
+            if (selection.BlockingReason is not null)
+            {
+                ReportWatch(session, selection.BlockingReason + " This launch was skipped. Still watching.", selection.BlockingReason, NotificationSeverity.Warning);
+                return;
+            }
+
+            if (!ReferenceEquals(_watchSession, session))
+            {
+                return;
+            }
+
+            if (process.CreationTime is long expected
+                && _processService.TryGetProcessCreationTime(process.Id, out long live)
+                && live != expected)
+            {
+                ReportWatch(session, $"{process.Name} exited before injection. Still watching.", null, NotificationSeverity.Warning);
+                return;
+            }
+
+            string[] dlls = [.. selection.Paths];
+            InjectResult result = await _injectorService.InjectAsync(process.Id, ProcessListPolicy.Is64Bit(process), dlls);
+            string message = BuildMessage(result);
+            if (selection.SkippedCount > 0)
+            {
+                message += Environment.NewLine + Environment.NewLine + selection.SkippedNote();
+            }
+
+            if (result.Success)
+            {
+                RememberInjection(process, dlls, eject: false);
+                StartModuleScan(forceAll: false, forceKey: process.InstanceKey);
+                ReportWatch(
+                    session,
+                    $"Injected into {process.Name} ({process.Id}). Still watching.",
+                    $"Injected into {process.Name} ({process.Id}). Still watching.",
+                    NotificationSeverity.Success,
+                    TimeSpan.FromSeconds(4));
+            }
+            else
+            {
+                if (!_elevationService.IsElevated && LooksLikeAccessProblem(message))
+                {
+                    message += "\n\nThe target process may require administrator rights. Use \"Restart as Admin\" and try again.";
+                }
+
+                ReportWatch(
+                    session,
+                    $"Injection into {process.Name} ({process.Id}) failed. Still watching.",
+                    message,
+                    NotificationSeverity.Error,
+                    TimeSpan.FromSeconds(8));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Watch auto-inject failed");
+            ReportWatch(
+                session,
+                $"Injection into {process.Name} ({process.Id}) failed. Still watching.",
+                ex.Message,
+                NotificationSeverity.Error,
+                TimeSpan.FromSeconds(8));
+        }
+        finally
+        {
+            IsOperationRunning = false;
+        }
+    }
+
+    private void ReportWatch(WatchSessionState session, string status, string? notification, NotificationSeverity severity, TimeSpan? timeout = null)
+    {
+        if (!ReferenceEquals(_watchSession, session))
+        {
+            return;
+        }
+
+        WatchStatusText = status;
+        if (notification is not null)
+        {
+            _notifications.Show("Watch", notification, severity, timeout);
+        }
+    }
+
     private async Task PopulateIconsAsync(IReadOnlyList<ProcessInfo> processes, CancellationToken cancellationToken)
     {
         try
@@ -1332,4 +1859,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _logger?.LogDebug(ex, "Populating process icons failed");
         }
     }
+}
+
+/// <summary>
+///     Asks the view to show the watch window, optionally with an executable already filled in.
+/// </summary>
+public sealed class WatchConfigRequestedEventArgs : EventArgs
+{
+    public WatchConfigRequestedEventArgs(string? suggestedTarget)
+    {
+        SuggestedTarget = suggestedTarget;
+    }
+
+    public string? SuggestedTarget { get; }
 }

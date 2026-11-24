@@ -76,10 +76,17 @@ internal sealed class FakeInjectorService : IInjectorService
 
     public InjectResult Result { get; set; } = new(true, "Successfully injected module!", string.Empty);
 
-    public Task<InjectResult> InjectAsync(int processId, bool is64Bit, IReadOnlyList<string> dllPaths, CancellationToken cancellationToken = default)
+    public Task<InjectResult>? InjectGate { get; set; }
+
+    public async Task<InjectResult> InjectAsync(int processId, bool is64Bit, IReadOnlyList<string> dllPaths, CancellationToken cancellationToken = default)
     {
         Calls.Add(("inject", processId, is64Bit, [.. dllPaths]));
-        return Task.FromResult(Result);
+        if (InjectGate is not null)
+        {
+            return await InjectGate.WaitAsync(cancellationToken);
+        }
+
+        return Result;
     }
 
     public Task<InjectResult> EjectAsync(int processId, bool is64Bit, IReadOnlyList<string> dllPaths, CancellationToken cancellationToken = default)
