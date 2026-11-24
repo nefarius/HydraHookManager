@@ -64,6 +64,7 @@ public partial class MainWindow : FluentWindow
         viewModel.ExitRequested += (_, _) => Close();
         viewModel.UpdateAvailable += ViewModel_UpdateAvailable;
         viewModel.InspectModulesRequested += ViewModel_InspectModulesRequested;
+        viewModel.WatchConfigRequested += ViewModel_WatchConfigRequested;
 
         UpdateSortIndicators();
     }
@@ -187,6 +188,57 @@ public partial class MainWindow : FluentWindow
                 _ = _viewModel.RefreshIfIdleAsync();
             }
         }
+
+        if (e.PropertyName == nameof(MainWindowViewModel.IsWatchArmed))
+        {
+            UpdateAutoRefreshTimer();
+        }
+    }
+
+    private void WatchBanner_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (e.HeightChanged)
+        {
+            UpdateDllPaneLimit();
+        }
+    }
+
+    private async void SaveProfileButton_Click(object sender, RoutedEventArgs e)
+    {
+        TextBox nameBox = new()
+        {
+            Text = _viewModel.ActiveProfileName ?? "",
+            MinWidth = 280
+        };
+        ContentDialogResult result = await _contentDialogService.ShowSimpleDialogAsync(
+            new SimpleContentDialogCreateOptions
+            {
+                Title = "Save profile",
+                Content = nameBox,
+                PrimaryButtonText = "Save",
+                CloseButtonText = "Cancel"
+            });
+        if (result != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        _viewModel.SaveProfile(nameBox.Text);
+    }
+
+    private void ViewModel_WatchConfigRequested(object? sender, WatchConfigRequestedEventArgs e)
+    {
+        WatchConfigViewModel config = new(
+            e.SuggestedTarget ?? _viewModel.WatchTarget,
+            _viewModel.WatchTrigger,
+            _viewModel.WatchDelayMs,
+            _viewModel.DllSelectionSummary);
+        WatchConfigWindow window = new(config) { Owner = this };
+        bool? armed = window.ShowDialog();
+        if (armed == true && window.Result is WatchConfig watch)
+        {
+            _viewModel.ArmWatch(watch);
+        }
     }
 
     private async void AutoRefreshTimer_Tick(object? sender, EventArgs e)
@@ -220,7 +272,9 @@ public partial class MainWindow : FluentWindow
 
     private void UpdateAutoRefreshTimer()
     {
-        bool run = IsLoaded && _viewModel.IsAutoRefreshEnabled && WindowState != WindowState.Minimized;
+        bool armed = _viewModel.IsWatchArmed;
+        bool run = IsLoaded && (armed || (_viewModel.IsAutoRefreshEnabled && WindowState != WindowState.Minimized));
+        _autoRefreshTimer.Interval = TimeSpan.FromMilliseconds(armed ? 750 : 1500);
         if (run)
         {
             if (!_autoRefreshTimer.IsEnabled)

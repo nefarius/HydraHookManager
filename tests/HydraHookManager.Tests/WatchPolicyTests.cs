@@ -1,0 +1,170 @@
+using HydraHookManager.Models;
+
+namespace HydraHookManager.Tests;
+
+public class WatchPolicyTests
+{
+    [Fact]
+    public void MatchesTarget_uses_the_full_path_when_the_target_has_a_separator()
+    {
+        ProcessInfo game = TestData.Process(1, "game.exe", created: 1, exePath: @"C:\Games\game.exe");
+
+        Assert.True(WatchPolicy.MatchesTarget(game, @"C:\Games\game.exe"));
+        Assert.True(WatchPolicy.MatchesTarget(game, @"\\?\C:\Games\game.exe"));
+        Assert.False(WatchPolicy.MatchesTarget(game, @"D:\Games\game.exe"));
+        Assert.False(WatchPolicy.MatchesTarget(game, @"C:\Games\other.exe"));
+    }
+
+    [Fact]
+    public void MatchesTarget_accepts_a_file_name_with_or_without_the_exe_suffix()
+    {
+        ProcessInfo named = TestData.Process(1, "game", created: 1, exePath: @"D:\bin\game.exe");
+        ProcessInfo other = TestData.Process(2, "gamehelper.exe", created: 2, exePath: @"D:\bin\gamehelper.exe");
+
+        Assert.True(WatchPolicy.MatchesTarget(named, "game"));
+        Assert.True(WatchPolicy.MatchesTarget(named, "GAME.EXE"));
+        Assert.True(WatchPolicy.MatchesTarget(named, "game.exe"));
+        Assert.False(WatchPolicy.MatchesTarget(other, "game"));
+        Assert.False(WatchPolicy.MatchesTarget(other, "game.exe"));
+        Assert.False(WatchPolicy.MatchesTarget(named, "  "));
+    }
+
+    [Fact]
+    public void Seed_records_running_matches_and_skips_an_unknown_creation_time()
+    {
+        ProcessInfo running = TestData.Process(1, "game.exe", created: 10, exePath: @"C:\game.exe");
+        ProcessInfo unknown = TestData.Process(2, "game.exe", omitCreationTime: true, exePath: @"C:\game.exe");
+        WatchSessionState session = Session(WatchTrigger.OnLaunch);
+
+        WatchPolicy.SeedExistingProcesses([running, unknown], session);
+
+        Assert.Equal([running.InstanceKey], session.HandledInstances);
+        Assert.Null(WatchPolicy.EvaluateTick([running, unknown], session, 1_000));
+    }
+
+    [Fact]
+    public void EvaluateTick_injects_a_new_launch_once_and_a_later_instance_again()
+    {
+        WatchSessionState session = Session(WatchTrigger.OnLaunch);
+        ProcessInfo first = TestData.Process(4, "game.exe", created: 100, exePath: @"C:\game.exe");
+        WatchPolicy.SeedExistingProcesses([first], session);
+
+        Assert.Null(WatchPolicy.EvaluateTick([first], session, 1_000));
+
+        ProcessInfo launched = TestData.Process(5, "game.exe", window: "Play", created: 200, exePath: @"C:\game.exe");
+        ProcessInfo? ready = WatchPolicy.EvaluateTick([first, launched], session, 2_000);
+        Assert.Same(launched, ready);
+        session.HandledInstances.Add(launched.InstanceKey);
+        Assert.Null(WatchPolicy.EvaluateTick([first, launched], session, 3_000));
+
+        ProcessInfo again = TestData.Process(5, "game.exe", window: "Play", created: 300, exePath: @"C:\game.exe");
+        Assert.Same(again, WatchPolicy.EvaluateTick([again], session, 4_000));
+    }
+
+    [Fact]
+    public void EvaluateTick_waits_for_a_window_or_direct3d_and_honors_the_delay()
+    {
+        ProcessInfo quiet = TestData.Process(1, "game.exe", created: 1, exePath: @"C:\game.exe");
+        WatchSessionState window = Session(WatchTrigger.WaitForWindow, delayMs: 0);
+        Assert.Null(WatchPolicy.EvaluateTick([quiet], window, 100));
+        quiet.WindowTitle = "Play";
+        Assert.Same(quiet, WatchPolicy.EvaluateTick([quiet], window, 100));
+
+        ProcessInfo graphics = TestData.Process(2, "game.exe", created: 2, exePath: @"C:\game.exe");
+        WatchSessionState direct3d = Session(WatchTrigger.WaitForDirect3D, delayMs: 500);
+        Assert.Null(WatchPolicy.EvaluateTick([graphics], direct3d, 1_000));
+        graphics.GraphicsApi = "D3D11";
+        Assert.Null(WatchPolicy.EvaluateTick([graphics], direct3d, 1_200));
+        Assert.Same(graphics, WatchPolicy.EvaluateTick([graphics], direct3d, 1_700));
+    }
+
+    [Fact]
+    public void EvaluateTick_skips_an_unknown_creation_time_and_drops_exited_keys()
+    {
+        ProcessInfo unknown = TestData.Process(1, "game.exe", omitCreationTime: true, exePath: @"C:\game.exe");
+        WatchSessionState session = Session(WatchTrigger.OnLaunch);
+        session.HandledInstances.Add(new ProcessInstanceKey(9, 9));
+        session.ReadySinceTicks[new ProcessInstanceKey(8, 8)] = 1;
+
+        Assert.Null(WatchPolicy.EvaluateTick([unknown], session, 1_000));
+        Assert.Empty(session.HandledInstances);
+        Assert.Empty(session.ReadySinceTicks);
+    }
+
+    [Fact]
+    public void Direct3D_watch_targets_are_scanned_without_a_window_and_protected_processes_stay_out()
+    {
+        ProcessInfo windowless = TestData.Process(1, "game.exe", created: 1, exePath: @"C:\game.exe");
+        ProcessInfo locked = TestData.Process(2, "game.exe", created: 2, exePath: @"C:\game.exe");
+        ProcessInfo admin = TestData.Process(3, "game.exe", created: 3, exePath: @"C:\game.exe");
+        locked.AccessState = ProcessAccessState.Protected;
+        admin.AccessState = ProcessAccessState.RequiresAdmin;
+        WatchSessionState session = Session(WatchTrigger.WaitForDirect3D);
+        List<ProcessInfo> watchTargets = WatchPolicy.FindScanTargetsForWatch([windowless, locked, admin], session);
+        HashSet<ProcessInstanceKey> keys = watchTargets.Select(process => process.InstanceKey).ToHashSet();
+
+        List<ProcessInfo> unelevated = Scan(watchTargets, keys, elevated: false);
+        List<ProcessInfo> elevated = Scan(watchTargets, keys, elevated: true);
+
+        Assert.Equal([1, 2, 3], watchTargets.Select(process => process.Id));
+        Assert.Equal([1], unelevated.Select(process => process.Id));
+        Assert.Equal([1, 3], elevated.Select(process => process.Id));
+        Assert.Empty(WatchPolicy.FindScanTargetsForWatch([windowless], Session(WatchTrigger.OnLaunch)));
+    }
+
+    [Fact]
+    public void A_direct3d_watch_target_is_not_throttled()
+    {
+        ProcessInfo game = TestData.Process(1, "game.exe", created: 1, exePath: @"C:\game.exe");
+        Dictionary<ProcessInstanceKey, long> last = new() { [game.InstanceKey] = 8_000 };
+
+        List<ProcessInfo> targets = ModuleInspectionPolicy.SelectScanTargets(
+            [game],
+            selectedKey: null,
+            trackedKeys: new HashSet<ProcessInstanceKey>(),
+            scanAllAccessible: false,
+            elevated: true,
+            lastScanTicks: last,
+            nowTicks: 10_000,
+            throttleTicks: 5_000,
+            forceAll: false,
+            forceKey: null,
+            watchKeys: new HashSet<ProcessInstanceKey> { game.InstanceKey });
+
+        Assert.Equal([1], targets.Select(process => process.Id));
+    }
+
+    [Fact]
+    public void ClampDelayMs_keeps_the_value_inside_the_supported_range()
+    {
+        Assert.Equal(0, WatchPolicy.ClampDelayMs(-5));
+        Assert.Equal(20, WatchPolicy.ClampDelayMs(20));
+        Assert.Equal(30_000, WatchPolicy.ClampDelayMs(40_000));
+    }
+
+    private static WatchSessionState Session(WatchTrigger trigger, int delayMs = 0)
+    {
+        return new WatchSessionState(new WatchConfig
+        {
+            Target = "game.exe",
+            Trigger = trigger,
+            DelayMs = delayMs
+        });
+    }
+
+    private static List<ProcessInfo> Scan(IReadOnlyList<ProcessInfo> processes, IReadOnlySet<ProcessInstanceKey> watchKeys, bool elevated)
+    {
+        return ModuleInspectionPolicy.SelectScanTargets(
+            processes,
+            selectedKey: null,
+            trackedKeys: new HashSet<ProcessInstanceKey>(),
+            scanAllAccessible: false,
+            elevated,
+            lastScanTicks: new Dictionary<ProcessInstanceKey, long>(),
+            nowTicks: 0,
+            throttleTicks: 5_000,
+            forceAll: false,
+            forceKey: null,
+            watchKeys);
+    }
+}

@@ -19,8 +19,10 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 - Flat list or parent/child tree. A process is nested under a parent that is still in the list. When both creation times are known, the parent must have been created at or before the child, which rejects a reused parent PID. If either creation time is missing, the parent link is best-effort.
 - Windowed, Direct3D, and Injected filters. The chips combine. In the tree, a matching process stays attached to its ancestor chain. A text match that fails the active chips is included only when a matching descendant hangs off it.
 - Access marks on the name: a shield when the process needs an administrator, a lock when it stays unreadable even when elevated.
-- Injection marks that survive a manager restart. A verified mark means the DLL was seen loaded. A tracked mark means it is recorded in the ledger but the module list could not be read. Right-click a process to inject, eject, inspect loaded modules, bring its window forward, open the executable location, or copy the PID or path.
-- Auto-refresh about every 1.5 seconds while the window is open and not minimized. It pauses while the window is minimized and runs again when the window is activated or restored. The Refresh button and F5 still refresh immediately.
+- Injection marks that survive a manager restart. A verified mark means the DLL was seen loaded. A tracked mark means it is recorded in the ledger but the module list could not be read. Right-click a process to inject, eject, watch that executable, inspect loaded modules, bring its window forward, open the executable location, or copy the PID or path.
+- Named profiles store a DLL list, the check boxes, and an optional watch target. The manager loads the active profile on startup.
+- Watch & Auto-Inject follows one executable. The trigger is on launch, when a window opens, or when Direct3D loads, plus an optional delay from 0 to 30000 ms. Processes already running when you arm it are left alone. Each new instance, identified by PID and creation time, is injected at most once. The watch stays armed for the next launch.
+- Auto-refresh about every 1.5 seconds while the window is open and not minimized. It pauses while the window is minimized and runs again when the window is activated or restored. While a watch is armed, refresh continues about every 0.75 seconds, including while the window is minimized. The Refresh button and F5 still refresh immediately. The manager always starts with the watch disarmed.
 - If the selected process exits and a newer instance of the same executable starts before another process is selected, that instance is selected. This follows a process only when its creation time was known.
 - Inject and eject one or more DLLs via the bundled [nefarius/Injector](https://github.com/nefarius/Injector) v1.5.0; the matching x86 or x64 binary is picked from the target architecture.
 - DLL list is persisted between sessions, including which rows are checked. Add DLLs with a dialog or drag and drop. Each row shows the PE architecture, a warning when the file is missing or not a valid PE, and a Loaded mark when that DLL is loaded in the selected process.
@@ -36,7 +38,8 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 
 - Injection into protected or elevated processes requires running the manager elevated.
 - The injector does not bypass anti-cheat, protected processes or PPL.
-- Loaded-module scans use `PROCESS_VM_READ` and run for windowed, selected, and ledger-tracked processes. The Direct3D filter scans every process whose creation time is known. Protected processes are not scanned. A non-elevated manager skips processes that already denied a limited query. A module scan can lag one refresh behind the process list.
+- Loaded-module scans use `PROCESS_VM_READ` and run for windowed, selected, and ledger-tracked processes. The Direct3D filter scans every process whose creation time is known. A watch set to wait for Direct3D also scans that executable when it has no window. Protected processes are not scanned. A non-elevated manager skips processes that already denied a limited query. A module scan can lag one refresh behind the process list.
+- Watch does not inject a process that is already running when you arm it, and it does not retry an instance it already tried. Arming is not restored after a restart.
 - The process tree follows parent PIDs present in the current snapshot. A parent that has already exited is omitted. Auto-refresh polls that snapshot.
 - DLL architecture comes from the PE machine type (`x86`, `x64`, `ARM64`). A DLL whose machine type is something else is not sent to a process whose architecture is known. ARM64 processes are not a supported injection target; the host and bundled injector are x86 and x64 only.
 - Multi-monitor window placement is validated against the virtual screen bounds only.
@@ -52,10 +55,11 @@ Windows GUI for injecting DLLs into, and ejecting them from, running processes. 
 3. Verify the archive against `checksums.txt` (SHA-256).
 4. Extract to a writable folder and run `HydraHookManager.exe`.
 5. Select a process, add DLLs, click **Inject** (or **Eject** to unload them).
+6. Save a named profile to keep that DLL list. **Watch...** arms auto-inject for new launches of one executable. Use **Stop** on the banner to disarm it.
 
 Data locations (`%LocalAppData%\HydraHookManager`):
 
-- `settings.json` - DLL list and check boxes, sort order, tree mode, auto-refresh, windowed, Direct3D, and injected filters, window placement, DLL pane height, update-check settings. Older files that only have `DllPaths` load with every DLL checked.
+- `settings.json` - DLL list and check boxes, named profiles, the active profile, sort order, tree mode, auto-refresh, windowed, Direct3D, and injected filters, window placement, DLL pane height, update-check settings. A profile can store a watch target. Whether the watch is armed is not saved. Older files that only have `DllPaths` load with every DLL checked.
 - `state.json` - injected DLL ledger keyed by process id and creation time. It is separate from settings and is pruned when the process exits or the DLL is no longer loaded.
 - `Logs\` - Serilog rolling log files.
 

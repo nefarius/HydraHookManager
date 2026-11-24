@@ -10,7 +10,7 @@
         Title="HydraHook Manager"
         Height="640"
         Width="1040"
-        MinHeight="520"
+        MinHeight="560"
         MinWidth="860"
         d:DataContext="{d:DesignInstance Type=vm:MainWindowViewModel}"
         mc:Ignorable="d">
@@ -83,7 +83,7 @@
             <RowDefinition x:Name="HeaderRow" Height="Auto" />
             <RowDefinition Height="*" MinHeight="160" />
             <RowDefinition x:Name="SplitterRow" Height="Auto" />
-            <RowDefinition x:Name="DllPaneRow" Height="180" MinHeight="130" />
+            <RowDefinition x:Name="DllPaneRow" Height="180" MinHeight="170" />
             <RowDefinition x:Name="ActionRow" Height="Auto" />
             <RowDefinition x:Name="SnackbarRow" Height="Auto" />
         </Grid.RowDefinitions>
@@ -91,6 +91,25 @@
         <!-- Header -->
         <StackPanel Grid.Row="0" Margin="0,0,0,16">
             <ui:TitleBar Title="HydraHook Manager" />
+            <Border x:Name="WatchBanner"
+                    Margin="0,8,0,0"
+                    Padding="8,6"
+                    CornerRadius="4"
+                    Background="#22D97706"
+                    Visibility="{Binding IsWatchArmed, Converter={StaticResource BooleanToVisibility}}"
+                    SizeChanged="WatchBanner_SizeChanged">
+                <DockPanel LastChildFill="True">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <ui:Button Content="Configure..."
+                                   Margin="8,0,8,0"
+                                   Command="{Binding ConfigureWatchCommand}" />
+                        <ui:Button Content="Stop" Command="{Binding DisarmWatchCommand}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding WatchStatusText}"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
+                </DockPanel>
+            </Border>
         </StackPanel>
 
         <!-- Process list: grows/shrinks with window resize, docked top and bottom -->
@@ -174,6 +193,7 @@
                                      DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
                             <MenuItem Header="Inject configured DLLs" Command="{Binding InjectCommand}" />
                             <MenuItem Header="Eject configured DLLs" Command="{Binding EjectCommand}" />
+                            <MenuItem Header="Watch &amp; Auto-Inject this executable..." Command="{Binding WatchSelectedProcessCommand}" />
                             <MenuItem Header="Eject loaded DLL" ItemsSource="{Binding SelectedProcess.InjectedDlls}">
                                 <MenuItem.ItemContainerStyle>
                                     <Style TargetType="MenuItem">
@@ -375,6 +395,7 @@
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
@@ -386,8 +407,27 @@
                                TextTrimming="CharacterEllipsis"
                                VerticalAlignment="Center" />
                 </DockPanel>
+                <DockPanel Grid.Row="1" Margin="0,0,0,8" LastChildFill="True">
+                    <ui:Button DockPanel.Dock="Right"
+                               Content="Watch..."
+                               Margin="8,0,0,0"
+                               ToolTip="Watch an executable and inject the checked DLLs into each new launch"
+                               Command="{Binding ConfigureWatchCommand}" />
+                    <ui:Button DockPanel.Dock="Right"
+                               Content="Delete"
+                               Margin="8,0,0,0"
+                               Command="{Binding DeleteActiveProfileCommand}" />
+                    <ui:Button DockPanel.Dock="Right"
+                               Content="Save"
+                               Margin="8,0,0,0"
+                               Click="SaveProfileButton_Click" />
+                    <ComboBox MinWidth="160"
+                              ToolTip="Injection profile"
+                              ItemsSource="{Binding ProfileNames}"
+                              SelectedItem="{Binding ActiveProfileName, Mode=TwoWay}" />
+                </DockPanel>
                 <ListBox x:Name="DllListBox"
-                         Grid.Row="1"
+                         Grid.Row="2"
                          Margin="0,0,0,8"
                          AllowDrop="True"
                          ItemsSource="{Binding DllItems}"
@@ -459,7 +499,7 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-                <StackPanel Grid.Row="2" Orientation="Horizontal">
+                <StackPanel Grid.Row="3" Orientation="Horizontal">
                     <ui:Button Content="Add DLL"
                                Icon="{ui:SymbolIcon Add24}"
                                Click="AddDllButton_Click"
