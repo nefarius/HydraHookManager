@@ -956,9 +956,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 message += Environment.NewLine + Environment.NewLine + selection.SkippedNote();
             }
 
+            if (eject)
+            {
+                await FinishEjectAsync(selected, dlls, result, message);
+                return;
+            }
+
             if (result.Success)
             {
-                RememberInjection(selected, dlls, eject);
+                RememberInjection(selected, dlls, eject: false);
                 StartModuleScan(forceAll: false, forceKey: selected.InstanceKey);
                 _notifications.Show($"{verb} successful", message, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
             }
@@ -1342,26 +1348,52 @@ public sealed partial class MainWindowViewModel : ObservableObject
         try
         {
             InjectResult result = await _injectorService.EjectAsync(selected.Id, ProcessListPolicy.Is64Bit(selected), [dllPath]);
-            string message = BuildMessage(result);
-            if (!result.Success)
-            {
-                if (!_elevationService.IsElevated && LooksLikeAccessProblem(message))
-                {
-                    message += "\n\nThe target process may require administrator rights. Use \"Restart as Admin\" and try again.";
-                }
-
-                _notifications.Show("Ejection failed", message, NotificationSeverity.Error, TimeSpan.FromSeconds(8));
-                return false;
-            }
-
-            RememberInjection(selected, [dllPath], eject: true);
-            StartModuleScan(forceAll: false, forceKey: selected.InstanceKey);
-            _notifications.Show("Ejection successful", message, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
-            return true;
+            return await FinishEjectAsync(selected, [dllPath], result, BuildMessage(result));
         }
         finally
         {
             IsOperationRunning = false;
+        }
+    }
+
+    private async Task<bool> FinishEjectAsync(ProcessInfo selected, IReadOnlyList<string> dlls, InjectResult result, string message)
+    {
+        bool unloaded = result.Success || await ConfirmDllsUnloadedAsync(selected, dlls);
+        if (!unloaded)
+        {
+            if (!_elevationService.IsElevated && LooksLikeAccessProblem(message))
+            {
+                message += "\n\nThe target process may require administrator rights. Use \"Restart as Admin\" and try again.";
+            }
+
+            _notifications.Show("Ejection failed", message, NotificationSeverity.Error, TimeSpan.FromSeconds(8));
+            return false;
+        }
+
+        RememberInjection(selected, dlls, eject: true);
+        StartModuleScan(forceAll: false, forceKey: selected.InstanceKey);
+        if (!result.Success)
+        {
+            message = dlls.Count == 1
+                ? "The DLL is no longer loaded in the process."
+                : "The DLLs are no longer loaded in the process.";
+        }
+
+        _notifications.Show("Ejection successful", message, NotificationSeverity.Success, TimeSpan.FromSeconds(4));
+        return true;
+    }
+
+    private async Task<bool> ConfirmDllsUnloadedAsync(ProcessInfo selected, IReadOnlyList<string> dlls)
+    {
+        try
+        {
+            ModuleScanResult scan = await _moduleScanner.ScanProcessAsync(selected.Id, selected.CreationTime);
+            return ModuleInspectionPolicy.ReportsDllsUnloaded(scan, dlls);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Could not confirm whether eject removed the DLL from PID {ProcessId}", selected.Id);
+            return false;
         }
     }
 

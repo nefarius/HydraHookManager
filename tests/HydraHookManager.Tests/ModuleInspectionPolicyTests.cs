@@ -103,6 +103,20 @@ public class ModuleInspectionPolicyTests
     }
 
     [Fact]
+    public void ReportsDllsUnloaded_accepts_an_accessible_scan_that_no_longer_lists_the_dll()
+    {
+        ModuleScanResult empty = new(ProcessAccessState.Accessible, [], null);
+        Assert.True(ModuleInspectionPolicy.ReportsDllsUnloaded(empty, [@"C:\a.dll"]));
+
+        ModuleScanResult devicePath = new(
+            ProcessAccessState.Accessible,
+            [new LoadedModuleInfo("a.dll", @"\Device\HarddiskVolume3\a.dll", 0, 10)],
+            null);
+        Assert.False(ModuleInspectionPolicy.ReportsDllsUnloaded(devicePath, [@"D:\games\a.dll"]));
+        Assert.False(ModuleInspectionPolicy.ReportsDllsUnloaded(new(ProcessAccessState.RequiresAdmin, [], null), [@"C:\a.dll"]));
+    }
+
+    [Fact]
     public void OrderModulesForInspector_pins_injected_then_graphics_and_marks_user_dlls_ejectable()
     {
         LoadedModuleInfo injected = Module(@"D:\mods\hook.dll");
